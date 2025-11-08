@@ -1,0 +1,16 @@
+{
+  "name": "gen3dchat",
+  "scripts": {
+    "dev": "wrangler pages dev --proxy 5173 --compatibility-date=2025-11-08",
+    "dev:front": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "deploy": "npm run build && wrangler pages deploy frontend/dist"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "wrangler": "^3.80.0"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  }
+}
