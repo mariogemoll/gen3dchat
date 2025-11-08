@@ -1,7 +1,7 @@
 {
   "name": "gen3dchat",
   "scripts": {
-    "dev": "wrangler pages dev --proxy 5173 --compatibility-date=2025-11-08",
+    "dev": "concurrently \"wrangler pages dev --port 8788\" \"npm run dev:front\"",
     "dev:front": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend run build",
     "deploy": "npm run build && wrangler pages deploy frontend/dist"
@@ -11,6 +11,11 @@
     "wrangler": "^3.80.0"
   },
   "dependencies": {
-    "hono": "^4.6.0"
+    "@langchain/core": "^1.0.3",
+    "@langchain/langgraph": "^1.0.1",
+    "@langchain/openai": "^1.0.0",
+    "hono": "^4.6.0",
+    "langsmith": "^0.3.79",
+    "openai": "^6.8.1"
   }
 }
