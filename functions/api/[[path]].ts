@@ -27,7 +27,13 @@ class CloudflareKVSaver extends BaseCheckpointSaver {
     const threadId = config.configurable?.thread_id
     if (!threadId) return undefined
 
-    const key = `checkpoint:${threadId}`
+    const key = `checkpoint:${threadId}:latest`
+    const data = await this.kv.get(key, 'json') as CheckpointTuple | null
+    return data || undefined
+  }
+
+  async getCheckpointById(threadId: string, checkpointId: string): Promise<CheckpointTuple | undefined> {
+    const key = `checkpoint:${threadId}:${checkpointId}`
     const data = await this.kv.get(key, 'json') as CheckpointTuple | null
     return data || undefined
   }
@@ -41,7 +47,12 @@ class CloudflareKVSaver extends BaseCheckpointSaver {
 
   async put(config: { configurable?: { thread_id: string } }, checkpoint: Checkpoint, metadata: CheckpointMetadata): Promise<{ configurable: { thread_id: string } }> {
     const threadId = config.configurable?.thread_id || crypto.randomUUID()
-    const key = `checkpoint:${threadId}`
+    const checkpointId = checkpoint.id
+
+    // Store checkpoint with its specific ID
+    const specificKey = `checkpoint:${threadId}:${checkpointId}`
+    // Also store as latest
+    const latestKey = `checkpoint:${threadId}:latest`
 
     const tuple: CheckpointTuple = {
       config: { configurable: { thread_id: threadId } },
@@ -50,7 +61,12 @@ class CloudflareKVSaver extends BaseCheckpointSaver {
       parentConfig: config.configurable?.thread_id ? config : undefined,
     }
 
-    await this.kv.put(key, JSON.stringify(tuple))
+    // Store both the specific checkpoint and update latest
+    await Promise.all([
+      this.kv.put(specificKey, JSON.stringify(tuple)),
+      this.kv.put(latestKey, JSON.stringify(tuple))
+    ])
+
     return { configurable: { thread_id: threadId } }
   }
 
@@ -59,7 +75,9 @@ class CloudflareKVSaver extends BaseCheckpointSaver {
   }
 
   async deleteThread(threadId: string): Promise<void> {
-    await this.kv.delete(`checkpoint:${threadId}`)
+    // Note: This only deletes the latest checkpoint
+    // In a production system, you'd want to list and delete all checkpoints for this thread
+    await this.kv.delete(`checkpoint:${threadId}:latest`)
   }
 }
 
@@ -89,9 +107,9 @@ app.post('/threads', async (c) => {
   // Initialize LangSmith client and tracer if tracing enabled
   const langsmithClient = c.env.LANGCHAIN_TRACING_V2 === 'true' && c.env.LANGCHAIN_API_KEY
     ? new Client({
-        apiKey: c.env.LANGCHAIN_API_KEY,
-        apiUrl: 'https://api.smith.langchain.com',
-      })
+      apiKey: c.env.LANGCHAIN_API_KEY,
+      apiUrl: 'https://api.smith.langchain.com',
+    })
     : undefined
 
   const callbacks = langsmithClient
@@ -139,6 +157,10 @@ app.post('/threads', async (c) => {
   const lastMessage = result.messages[result.messages.length - 1]
   const response = lastMessage.content
 
+  // Get the checkpoint ID from the saved checkpoint
+  const tuple = await checkpointer.getTuple({ configurable: { thread_id: currentThreadId } })
+  const currentCheckpointId = tuple?.checkpoint?.id || crypto.randomUUID()
+
   // Explicitly wait for LangSmith client to flush
   if (langsmithClient) {
     await langsmithClient.awaitPendingTraceBatches?.()
@@ -147,7 +169,27 @@ app.post('/threads', async (c) => {
   return c.json({
     response,
     threadId: currentThreadId,
+    checkpointId: currentCheckpointId,
     messageCount: result.messages.length,
+  })
+})
+
+app.get('/threads/:threadId/:checkpointId', async (c) => {
+  const threadId = c.req.param('threadId')
+  const checkpointId = c.req.param('checkpointId')
+
+  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY)
+  const tuple = await checkpointer.getCheckpointById(threadId, checkpointId)
+
+  if (!tuple) {
+    return c.json({ error: 'Checkpoint not found' }, 404)
+  }
+
+  return c.json({
+    threadId,
+    checkpointId,
+    checkpoint: tuple.checkpoint,
+    metadata: tuple.metadata,
   })
 })
 
