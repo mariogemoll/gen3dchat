@@ -21,7 +21,14 @@ binding = "..."
 database_name = "..."
 database_id = "..."
 
-# Note: Environment variables must be set in Cloudflare Dashboard:
-# Workers & Pages > gen3dchat > Settings > Environment variables
-# Required: OPENAI_API_KEY
-# Optional: LANGCHAIN_TRACING_V2, LANGCHAIN_API_KEY, LANGCHAIN_PROJECT
+# Required secrets (encrypted environment variables):
+#   OPENAI_API_KEY - OpenAI API key
+#   SQIDS_THREAD_ALPHABET - Custom alphabet for thread ID encoding (keep secret!)
+#   SQIDS_CHECKPOINT_ALPHABET - Custom alphabet for checkpoint ID encoding (keep secret!)
+#
+# Optional:
+#   LANGCHAIN_TRACING_V2, LANGCHAIN_API_KEY, LANGCHAIN_PROJECT
+#
+# Generate custom Sqids alphabets by shuffling: abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+# Use different shuffles for SQIDS_THREAD_ALPHABET and SQIDS_CHECKPOINT_ALPHABET
+# NEVER commit these alphabets to source control!

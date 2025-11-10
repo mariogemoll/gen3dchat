@@ -16,6 +16,7 @@
     "@langchain/openai": "^1.0.0",
     "hono": "^4.6.0",
     "langsmith": "^0.3.79",
-    "openai": "^6.8.1"
+    "openai": "^6.8.1",
+    "sqids": "^0.3.0"
   }
 }

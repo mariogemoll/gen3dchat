@@ -9,6 +9,7 @@ import { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint'
 import type { Checkpoint, CheckpointMetadata, CheckpointTuple } from '@langchain/langgraph-checkpoint'
 import { Client } from 'langsmith'
 import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain'
+import Sqids from 'sqids'
 
 interface Env {
   CHAT_HISTORY: any
@@ -17,6 +18,105 @@ interface Env {
   LANGCHAIN_TRACING_V2?: string
   LANGCHAIN_API_KEY?: string
   LANGCHAIN_PROJECT?: string
+  SQIDS_THREAD_ALPHABET: string
+  SQIDS_CHECKPOINT_ALPHABET: string
+}
+
+// Validate required environment variables
+function validateEnv(env: Env): void {
+  const required = [
+    'OPENAI_API_KEY',
+    'SQIDS_THREAD_ALPHABET',
+    'SQIDS_CHECKPOINT_ALPHABET',
+  ]
+
+  const missing: string[] = []
+
+  for (const key of required) {
+    if (!env[key as keyof Env]) {
+      missing.push(key)
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables: ${missing.join(', ')}. ` +
+      `Please set them in Cloudflare Dashboard: Workers & Pages > Settings > Environment variables`
+    )
+  }
+
+  // Validate Sqids alphabets have enough characters
+  if (env.SQIDS_THREAD_ALPHABET.length < 3) {
+    throw new Error('SQIDS_THREAD_ALPHABET must be at least 3 characters long')
+  }
+
+  if (env.SQIDS_CHECKPOINT_ALPHABET.length < 3) {
+    throw new Error('SQIDS_CHECKPOINT_ALPHABET must be at least 3 characters long')
+  }
+}
+
+// Helper to get Sqids instance with environment-specific alphabet
+function getThreadSqids(env: Env): Sqids {
+  return new Sqids({
+    alphabet: env.SQIDS_THREAD_ALPHABET,
+    minLength: 6,
+  })
+}
+
+function getCheckpointSqids(env: Env): Sqids {
+  return new Sqids({
+    alphabet: env.SQIDS_CHECKPOINT_ALPHABET,
+    minLength: 6,
+  })
+}
+
+// Helper functions for ID generation using atomic counters
+async function getNextThreadId(db: any, env: Env): Promise<string> {
+  // Atomically increment the counter and get the new value
+  const result = await db
+    .prepare('UPDATE counters SET value = value + 1 WHERE name = ? RETURNING value')
+    .bind('thread_id')
+    .first()
+
+  const counter = result?.value || 1
+  const sqids = getThreadSqids(env)
+  return sqids.encode([counter])
+}
+
+async function getNextCheckpointId(db: any, env: Env): Promise<string> {
+  // Atomically increment the counter and get the new value
+  const result = await db
+    .prepare('UPDATE counters SET value = value + 1 WHERE name = ? RETURNING value')
+    .bind('checkpoint_id')
+    .first()
+
+  const counter = result?.value || 1
+  const sqids = getCheckpointSqids(env)
+  return sqids.encode([counter])
+}
+
+async function storeCheckpointIdMapping(db: any, sqid: string, uuid: string): Promise<void> {
+  const now = Date.now()
+  await db
+    .prepare('INSERT OR IGNORE INTO checkpoint_ids (sqid, uuid, created_at) VALUES (?, ?, ?)')
+    .bind(sqid, uuid, now)
+    .run()
+}
+
+async function getUuidFromSqid(db: any, sqid: string): Promise<string | null> {
+  const result = await db
+    .prepare('SELECT uuid FROM checkpoint_ids WHERE sqid = ?')
+    .bind(sqid)
+    .first()
+  return result?.uuid || null
+}
+
+async function getSqidFromUuid(db: any, uuid: string): Promise<string | null> {
+  const result = await db
+    .prepare('SELECT sqid FROM checkpoint_ids WHERE uuid = ?')
+    .bind(uuid)
+    .first()
+  return result?.sqid || null
 }
 
 // Helper functions for session management
@@ -64,7 +164,7 @@ async function updateThreadTimestamp(db: any, threadId: string): Promise<void> {
 
 // Custom Cloudflare KV checkpoint saver
 class CloudflareKVSaver extends BaseCheckpointSaver {
-  constructor(private kv: any) {
+  constructor(private kv: any, private db: any, private env: Env) {
     super()
   }
 
@@ -91,11 +191,15 @@ class CloudflareKVSaver extends BaseCheckpointSaver {
   }
 
   async put(config: { configurable?: { thread_id: string } }, checkpoint: Checkpoint, metadata: CheckpointMetadata): Promise<{ configurable: { thread_id: string } }> {
-    const threadId = config.configurable?.thread_id || crypto.randomUUID()
-    const checkpointId = checkpoint.id
+    const threadId = config.configurable?.thread_id || await getNextThreadId(this.db, this.env)
+    const checkpointUuid = checkpoint.id
 
-    // Store checkpoint with its specific ID
-    const specificKey = `checkpoint:${threadId}:${checkpointId}`
+    // Generate Sqids checkpoint ID and store the mapping
+    const checkpointSqid = await getNextCheckpointId(this.db, this.env)
+    await storeCheckpointIdMapping(this.db, checkpointSqid, checkpointUuid)
+
+    // Store checkpoint with UUID (LangGraph's internal ID)
+    const specificKey = `checkpoint:${threadId}:${checkpointUuid}`
     // Also store as latest
     const latestKey = `checkpoint:${threadId}:latest`
 
@@ -210,6 +314,12 @@ const StateAnnotation = Annotation.Root({
 })
 
 const app = new Hono<{ Bindings: Env }>().basePath('/api')
+
+// Middleware to validate environment on first request
+app.use('*', async (c, next) => {
+  validateEnv(c.env)
+  await next()
+})
 
 app.get('/hello', (c) => c.json({ ok: true, time: new Date().toISOString() }))
 
@@ -443,11 +553,11 @@ The explanation text is important - users will only see this text, not the code 
     .addEdge('validationFailed', '__end__')
 
   // Set up checkpoint saver with KV
-  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY)
+  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY, c.env.DB, c.env)
   const graph = workflow.compile({ checkpointer })
 
   // Use provided threadId or generate new one
-  const currentThreadId = threadId || crypto.randomUUID()
+  const currentThreadId = threadId || await getNextThreadId(c.env.DB, c.env)
 
   // Create thread in DB if it's new
   if (!threadId) {
@@ -473,7 +583,10 @@ The explanation text is important - users will only see this text, not the code 
       // Return error immediately without creating a checkpoint
       // Get current checkpoint to maintain continuity
       const tuple = await checkpointer.getTuple({ configurable: { thread_id: currentThreadId } })
-      const currentCheckpointId = tuple?.checkpoint?.id || crypto.randomUUID()
+      const currentCheckpointUuid = tuple?.checkpoint?.id || crypto.randomUUID()
+
+      // Get the Sqids checkpoint ID for the response
+      const currentCheckpointSqid = await getSqidFromUuid(c.env.DB, currentCheckpointUuid) || currentCheckpointUuid
 
       const messages = tuple?.checkpoint?.channel_values?.messages as any[] || []
       const previousCode = tuple?.checkpoint?.channel_values?.currentCode as string || ''
@@ -481,7 +594,7 @@ The explanation text is important - users will only see this text, not the code 
       return c.json({
         response: `Validation error: ${validation.error}`,
         threadId: currentThreadId,
-        checkpointId: currentCheckpointId,
+        checkpointId: currentCheckpointSqid,
         messageCount: messages.length,
         currentCode: previousCode, // Return the last valid code
         validationRetries: 1,
@@ -499,7 +612,10 @@ The explanation text is important - users will only see this text, not the code 
 
   // Get the checkpoint ID from the saved checkpoint
   const tuple = await checkpointer.getTuple({ configurable: { thread_id: currentThreadId } })
-  const currentCheckpointId = tuple?.checkpoint?.id || crypto.randomUUID()
+  const currentCheckpointUuid = tuple?.checkpoint?.id || crypto.randomUUID()
+
+  // Get the Sqids checkpoint ID for the response
+  const currentCheckpointSqid = await getSqidFromUuid(c.env.DB, currentCheckpointUuid) || currentCheckpointUuid
 
   // Explicitly wait for LangSmith client to flush
   if (langsmithClient) {
@@ -509,7 +625,7 @@ The explanation text is important - users will only see this text, not the code 
   return c.json({
     response,
     threadId: currentThreadId,
-    checkpointId: currentCheckpointId,
+    checkpointId: currentCheckpointSqid,
     messageCount: result.messages.length,
     currentCode: result.currentCode || '',
     validationRetries: result.validationRetries || 0,
@@ -518,14 +634,17 @@ The explanation text is important - users will only see this text, not the code 
 
 app.get('/threads/:threadId/:checkpointId', async (c) => {
   const threadId = c.req.param('threadId')
-  const checkpointId = c.req.param('checkpointId')
+  const checkpointSqid = c.req.param('checkpointId')
+
+  // Try to resolve Sqid to UUID, if it fails assume it's already a UUID
+  const checkpointUuid = await getUuidFromSqid(c.env.DB, checkpointSqid) || checkpointSqid
 
   // Get session and check ownership
   const sessionId = await getOrCreateSession(c)
   const isOwner = await verifyThreadOwnership(c.env.DB, threadId, sessionId)
 
-  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY)
-  const tuple = await checkpointer.getCheckpointById(threadId, checkpointId)
+  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY, c.env.DB, c.env)
+  const tuple = await checkpointer.getCheckpointById(threadId, checkpointUuid)
 
   if (!tuple) {
     return c.json({ error: 'Checkpoint not found' }, 404)
@@ -536,7 +655,7 @@ app.get('/threads/:threadId/:checkpointId', async (c) => {
 
   return c.json({
     threadId,
-    checkpointId,
+    checkpointId: checkpointSqid,
     checkpoint: tuple.checkpoint,
     metadata: tuple.metadata,
   })
@@ -553,7 +672,7 @@ app.delete('/threads/:threadId', async (c) => {
     return c.json({ error: 'Unauthorized: You do not own this thread' }, 403)
   }
 
-  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY)
+  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY, c.env.DB, c.env)
   await checkpointer.deleteThread(threadId)
 
   // Also delete from DB
