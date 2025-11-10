@@ -10,6 +10,8 @@ import type { Checkpoint, CheckpointMetadata, CheckpointTuple } from '@langchain
 import { Client } from 'langsmith'
 import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain'
 import Sqids from 'sqids'
+import { buildJscadFromSpec } from 'buildspec/converter'
+import { validateSpec } from 'buildspec'
 
 interface Env {
   CHAT_HISTORY: any
@@ -20,6 +22,7 @@ interface Env {
   LANGCHAIN_PROJECT?: string
   SQIDS_THREAD_ALPHABET: string
   SQIDS_CHECKPOINT_ALPHABET: string
+  SYSTEM_PROMPT: string
 }
 
 // Validate required environment variables
@@ -28,6 +31,7 @@ function validateEnv(env: Env): void {
     'OPENAI_API_KEY',
     'SQIDS_THREAD_ALPHABET',
     'SQIDS_CHECKPOINT_ALPHABET',
+    'SYSTEM_PROMPT',
   ]
 
   const missing: string[] = []
@@ -230,65 +234,23 @@ class CloudflareKVSaver extends BaseCheckpointSaver {
   }
 }
 
-// Simple code syntax validator
-// Valid commands:
-// SET <variable> <value>
-// PRINT <variable>
-// ADD <variable> <value>
-// IF <variable> EQUALS <value>
-// END
-// Lines starting with # are comments
+// BuildSpec syntax validator
 function validateCode(code: string): { valid: boolean; error?: string } {
-  const lines = code.split('\n')
-  const validCommands = ['SET', 'PRINT', 'ADD', 'IF', 'END']
-  const variables = new Set<string>()
-  const ifStack: number[] = []
+  try {
+    // Parse the JSON
+    const parsed = JSON.parse(code)
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
+    // Validate using BuildSpec schema
+    const validated = validateSpec(parsed)
 
-    // Skip empty lines and comments
-    if (!line || line.startsWith('#')) continue
+    // Try to build JSCAD geometry to catch any conversion errors
+    buildJscadFromSpec(validated.root)
 
-    const tokens = line.split(/\s+/)
-    const command = tokens[0].toUpperCase()
-
-    if (!validCommands.includes(command)) {
-      return { valid: false, error: `Line ${i + 1}: Unknown command '${command}'` }
-    }
-
-    if (command === 'SET') {
-      if (tokens.length < 3) {
-        return { valid: false, error: `Line ${i + 1}: SET requires variable and value` }
-      }
-      variables.add(tokens[1])
-    } else if (command === 'PRINT') {
-      if (tokens.length < 2) {
-        return { valid: false, error: `Line ${i + 1}: PRINT requires variable` }
-      }
-    } else if (command === 'ADD') {
-      if (tokens.length < 3) {
-        return { valid: false, error: `Line ${i + 1}: ADD requires variable and value` }
-      }
-      variables.add(tokens[1])
-    } else if (command === 'IF') {
-      if (tokens.length < 4 || tokens[2].toUpperCase() !== 'EQUALS') {
-        return { valid: false, error: `Line ${i + 1}: IF requires format: IF variable EQUALS value` }
-      }
-      ifStack.push(i)
-    } else if (command === 'END') {
-      if (ifStack.length === 0) {
-        return { valid: false, error: `Line ${i + 1}: END without matching IF` }
-      }
-      ifStack.pop()
-    }
+    return { valid: true }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Invalid BuildSpec JSON'
+    return { valid: false, error: errorMessage }
   }
-
-  if (ifStack.length > 0) {
-    return { valid: false, error: `Unclosed IF statement at line ${ifStack[ifStack.length - 1] + 1}` }
-  }
-
-  return { valid: true }
 }
 
 // Define the state for our graph
@@ -372,7 +334,7 @@ app.post('/threads', async (c) => {
     const content = typeof lastMessage.content === 'string' ? lastMessage.content : ''
 
     // Check if message contains code block
-    const codeBlockMatch = content.match(/```(?:simple)?\n([\s\S]*?)\n```/)
+    const codeBlockMatch = content.match(/```(?:json|buildspec)?\n([\s\S]*?)\n```/)
     const code = codeBlockMatch ? codeBlockMatch[1] : content
 
     // Just update code, no message added (already validated outside graph)
@@ -388,42 +350,22 @@ app.post('/threads', async (c) => {
   const generateCode = async (state: typeof StateAnnotation.State) => {
     const systemMessage = {
       role: 'system',
-      content: `You are a code editor assistant. Generate code using this simple syntax:
-- SET <variable> <value> - Sets a variable
-- PRINT <variable> - Prints a variable
-- ADD <variable> <value> - Adds to a variable
-- IF <variable> EQUALS <value> - Conditional
-- END - Ends an IF block
-- # comment - Comments start with #
+      content: c.env.SYSTEM_PROMPT
+    }
 
-Current code:
-\`\`\`
-${state.currentCode || '# Empty file'}
-\`\`\`
+    // Build messages array - system first, then all history, then optional error at the end
+    const messagesToSend = [systemMessage, ...state.messages]
 
-${state.lastValidationError ? `Previous attempt failed with: ${state.lastValidationError}\n\nFix the error and try again.` : 'Generate a complete, valid code file based on the user request.'}
-
-IMPORTANT: Always respond with BOTH:
-1. A brief, human-readable explanation of what you changed or created (1-2 sentences)
-2. The complete code in a \`\`\`simple code block
-
-Example response format:
-"I've created a simple counter that starts at 0 and increments by 1.
-
-\`\`\`simple
-SET counter 0
-ADD counter 1
-PRINT counter
-\`\`\`"
-
-The explanation text is important - users will only see this text, not the code in chat.
-`
+    // If there's a validation error from a previous attempt, append it as the last user message
+    if (state.lastValidationError) {
+      messagesToSend.push(new HumanMessage(`The previous BuildSpec had an error: ${state.lastValidationError}\n\nPlease fix the error and generate a corrected version.`))
     }
 
     // Log the messages being sent to LLM
     console.log('=== Sending to LLM ===')
-    console.log('System message:', systemMessage.content.substring(0, 200) + '...')
+    console.log('System message:', c.env.SYSTEM_PROMPT.substring(0, 200) + '...')
     console.log('State messages:', state.messages.length)
+    console.log('Has validation error:', !!state.lastValidationError)
     state.messages.forEach((msg, idx) => {
       const msgType = msg.constructor.name
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
@@ -431,11 +373,11 @@ The explanation text is important - users will only see this text, not the code 
     })
     console.log('=====================')
 
-    const response = await llm.invoke([systemMessage, ...state.messages])
+    const response = await llm.invoke(messagesToSend)
 
     // Extract code from response
     const responseContent = typeof response.content === 'string' ? response.content : ''
-    const codeBlockMatch = responseContent.match(/```(?:simple)?\n([\s\S]*?)\n```/)
+    const codeBlockMatch = responseContent.match(/```(?:json|buildspec)?\n([\s\S]*?)\n```/)
 
     if (codeBlockMatch) {
       return {
@@ -575,7 +517,7 @@ The explanation text is important - users will only see this text, not the code 
   // This prevents creating unnecessary checkpoints for invalid code
   const isCodeUpdate = message.includes('```')
   if (isCodeUpdate) {
-    const codeBlockMatch = message.match(/```(?:simple)?\n([\s\S]*?)\n```/)
+    const codeBlockMatch = message.match(/```(?:json|buildspec)?\n([\s\S]*?)\n```/)
     const code = codeBlockMatch ? codeBlockMatch[1] : message
     const validation = validateCode(code)
 
