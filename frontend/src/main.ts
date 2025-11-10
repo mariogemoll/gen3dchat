@@ -40,7 +40,7 @@ form.addEventListener('submit', async (ev) => {
   submitBtn.disabled = true
 
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch('/api/threads', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message, threadId }),

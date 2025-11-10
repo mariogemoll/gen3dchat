@@ -79,7 +79,7 @@ app.post('/echo', async (c) => {
   return c.json({ you_sent: body })
 })
 
-app.post('/chat', async (c) => {
+app.post('/threads', async (c) => {
   const { message, threadId } = await c.req.json()
 
   if (!message) {
@@ -151,7 +151,7 @@ app.post('/chat', async (c) => {
   })
 })
 
-app.delete('/chat/:threadId', async (c) => {
+app.delete('/threads/:threadId', async (c) => {
   const threadId = c.req.param('threadId')
   const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY)
   await checkpointer.deleteThread(threadId)
