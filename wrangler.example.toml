@@ -3,15 +3,25 @@ compatibility_date = "2025-07-18"
 compatibility_flags = ["nodejs_compat", "no_handle_cross_request_promise_resolution"]
 pages_build_output_dir = "frontend/dist"
 
-# Create your own KV namespace and add it here:
-# [[kv_namespaces]]
-# binding = "CHAT_HISTORY"
-# preview_id = "your-preview-kv-id"
+[[kv_namespaces]]
+binding = "..."
+id = "..."
 
-# D1 Database - Uncomment and add your database_id after creating the database
-# Run: npx wrangler d1 create gen3dchat
-# Then: npx wrangler d1 execute gen3dchat --local --file=./schema.sql
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "gen3dchat"
-# database_id = "your-database-id-here"
+[[d1_databases]]
+binding = "..."
+database_name = "..."
+database_id = "..."
+
+[[env.preview.kv_namespaces]]
+binding = "..."
+id = "..."
+
+[[env.preview.d1_databases]]
+binding = "..."
+database_name = "..."
+database_id = "..."
+
+# Note: Environment variables must be set in Cloudflare Dashboard:
+# Workers & Pages > gen3dchat > Settings > Environment variables
+# Required: OPENAI_API_KEY
+# Optional: LANGCHAIN_TRACING_V2, LANGCHAIN_API_KEY, LANGCHAIN_PROJECT
