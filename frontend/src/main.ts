@@ -5,6 +5,15 @@ const submitBtn = form.querySelector<HTMLButtonElement>('button[type="submit"]')
 
 let threadId: string | null = null
 let checkpointId: string | null = null
+let isOwner: boolean = true // Start as true for new conversations
+
+function showChatForm() {
+  form.style.display = 'flex'
+}
+
+function hideChatForm() {
+  form.style.display = 'none'
+}
 
 function addMessage(role: 'user' | 'assistant', content: string) {
   const messageEl = document.createElement('div')
@@ -83,9 +92,22 @@ async function loadCheckpoint(loadThreadId: string, loadCheckpointId: string) {
     // Update state
     threadId = loadThreadId
     checkpointId = loadCheckpointId
+
+    // Check ownership from response header
+    const ownerHeader = res.headers.get('X-Thread-Owner')
+    isOwner = ownerHeader === 'true'
+
+    if (isOwner) {
+      showChatForm()
+    } else {
+      hideChatForm()
+    }
   } catch (e) {
     console.error('Error loading checkpoint:', e)
     addMessage('assistant', `Error loading checkpoint: ${String(e)}`)
+    // On error, hide the form to be safe
+    isOwner = false
+    hideChatForm()
   }
 }
 
@@ -98,6 +120,8 @@ window.addEventListener('popstate', (event) => {
     clearMessages()
     threadId = null
     checkpointId = null
+    isOwner = true
+    showChatForm()
   }
 })
 
@@ -135,7 +159,12 @@ form.addEventListener('submit', async (ev) => {
 
     const data = await res.json()
 
-    if (data.error) {
+    if (res.status === 403) {
+      // Not authorized
+      addMessage('assistant', 'Error: You are not authorized to continue this conversation.')
+      isOwner = false
+      hideChatForm()
+    } else if (data.error) {
       addMessage('assistant', `Error: ${data.error}`)
     } else {
       // Add assistant response

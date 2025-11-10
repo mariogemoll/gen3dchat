@@ -7,3 +7,11 @@ pages_build_output_dir = "frontend/dist"
 # [[kv_namespaces]]
 # binding = "CHAT_HISTORY"
 # preview_id = "your-preview-kv-id"
+
+# D1 Database - Uncomment and add your database_id after creating the database
+# Run: npx wrangler d1 create gen3dchat
+# Then: npx wrangler d1 execute gen3dchat --local --file=./schema.sql
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "gen3dchat"
+# database_id = "your-database-id-here"
