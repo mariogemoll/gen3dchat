@@ -1,7 +1,7 @@
-/.claude
-/.dev.vars
-/.wrangler
-/node_modules
-/package-lock.json
-/pnpm-lock.yaml
-/wrangler.toml
+.claude
+node_modules
+/pages/.wrangler
+/pages/.dev.vars
+/pages/package-lock.json
+/pages/pnpm-lock.yaml
+/pages/wrangler.toml
