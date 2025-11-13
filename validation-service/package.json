@@ -1,0 +1,14 @@
+{
+  "name": "jscad-validation-service",
+  "version": "1.0.0",
+  "description": "Sandboxed JSCAD validation service using QuickJS",
+  "type": "module",
+  "dependencies": {
+    "quickjs-emscripten": "^0.31.0",
+    "acorn": "^8.15.0",
+    "acorn-walk": "^8.3.4"
+  },
+  "devDependencies": {
+    "@vercel/node": "^3.0.0"
+  }
+}
