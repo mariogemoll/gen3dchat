@@ -105,10 +105,15 @@ main();
  * Validate JSCAD code
  */
 async function validateJscadCode(code) {
+  console.log('[Validation] Starting JSCAD code validation')
+
   // 1) AST validation first - blocks all dangerous operations
+  console.log('[Validation] Phase 1: AST validation')
   try {
     validateAst(code)
+    console.log('[Validation] AST validation passed')
   } catch (e) {
+    console.log('[Validation] AST validation failed:', e.message)
     return {
       ok: false,
       phase: 'validate',
@@ -117,8 +122,10 @@ async function validateJscadCode(code) {
   }
 
   // 2) Execute with real JSCAD in sandboxed VM
+  console.log('[Validation] Phase 2: Executing code in sandbox')
   try {
     const geometry = executeJscadInSandbox(code)
+    console.log('[Validation] Code execution completed')
 
     // Validate the returned geometry
     const isValidGeometry =
@@ -128,6 +135,7 @@ async function validateJscadCode(code) {
       Array.isArray(geometry.polygons)
 
     if (!isValidGeometry) {
+      console.log('[Validation] Invalid geometry returned:', typeof geometry)
       return {
         ok: false,
         phase: 'execute',
@@ -135,11 +143,12 @@ async function validateJscadCode(code) {
       }
     }
 
+    console.log('[Validation] Geometry validation passed, polygons:', geometry.polygons.length)
     return {
-      ok: true,
-      geometry: geometry
+      ok: true
     }
   } catch (e) {
+    console.log('[Validation] Execution error:', e.message || String(e))
     return {
       ok: false,
       phase: 'execute',
@@ -154,16 +163,20 @@ async function validateJscadCode(code) {
 export { validateJscadCode }
 
 export default async function handler(req, res) {
+  console.log('[Handler] Received request:', req.method)
+
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
   if (req.method === 'OPTIONS') {
+    console.log('[Handler] Responding to OPTIONS request')
     return res.status(200).end()
   }
 
   if (req.method !== 'POST') {
+    console.log('[Handler] Invalid method:', req.method)
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
@@ -171,13 +184,16 @@ export default async function handler(req, res) {
     const { code } = req.body
 
     if (!code || typeof code !== 'string') {
+      console.log('[Handler] Invalid request: missing or invalid code')
       return res.status(400).json({ error: 'Missing or invalid code parameter' })
     }
 
+    console.log('[Handler] Code received, length:', code.length)
     const result = await validateJscadCode(code)
+    console.log('[Handler] Validation completed, result:', result.ok ? 'success' : 'failed')
     return res.status(200).json(result)
   } catch (e) {
-    console.error('Validation error:', e)
+    console.error('[Handler] Server error:', e)
     return res.status(500).json({
       ok: false,
       phase: 'server',
