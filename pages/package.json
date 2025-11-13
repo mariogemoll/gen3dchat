@@ -2,9 +2,9 @@
   "name": "gen3dchat",
   "scripts": {
     "dev": "concurrently \"wrangler pages dev --port 8788\" \"npm run dev:front\"",
-    "dev:front": "npm --prefix frontend0 run dev",
-    "build": "npm --prefix frontend0 run build",
-    "deploy": "npm run build && wrangler pages deploy frontend0/dist"
+    "dev:front": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "deploy": "npm run build && wrangler pages deploy frontend/dist"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",
