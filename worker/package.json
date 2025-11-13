@@ -6,6 +6,7 @@
 		"wrangler": "^4.48.0"
 	},
 	"dependencies": {
+		"@langchain/anthropic": "^1.0.0",
 		"hono": "^4.10.5"
 	}
 }

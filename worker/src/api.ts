@@ -1,7 +1,7 @@
 // functions/api/[[path]].ts
 import { Hono } from 'hono'
 import { getCookie, setCookie } from 'hono/cookie'
-import { ChatOpenAI } from '@langchain/openai'
+import { ChatAnthropic } from '@langchain/anthropic'
 import { BaseMessage, HumanMessage, AIMessage } from '@langchain/core/messages'
 import { StateGraph, Annotation, messagesStateReducer } from '@langchain/langgraph'
 import { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint'
@@ -15,7 +15,7 @@ import { checkDailyLimit, incrementUsage } from './usage-tracker'
 interface Env {
   CHAT_HISTORY: any
   DB: any
-  OPENAI_API_KEY: string
+  ANTHROPIC_API_KEY: string
   LANGCHAIN_TRACING_V2?: string
   LANGCHAIN_API_KEY?: string
   LANGCHAIN_PROJECT?: string
@@ -29,7 +29,7 @@ interface Env {
 // Validate required environment variables
 function validateEnv(env: Env): void {
   const required = [
-    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
     'SQIDS_THREAD_ALPHABET',
     'SQIDS_CHECKPOINT_ALPHABET',
     'SYSTEM_PROMPT',
@@ -345,11 +345,9 @@ app.post('/_/threads', async (c) => {
     : []
 
   // Initialize LLM
-  const llm = new ChatOpenAI({
-    // model: 'gpt-4o-mini',
-    // model: 'gpt-5-mini-2025-08-07',
-    model: 'gpt-5-nano-2025-08-07',
-    apiKey: c.env.OPENAI_API_KEY,
+  const llm = new ChatAnthropic({
+    model: 'claude-sonnet-4-5',
+    apiKey: c.env.ANTHROPIC_API_KEY,
     // temperature: 0.7,
   })
 
