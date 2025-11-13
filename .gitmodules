@@ -1,0 +1,3 @@
+[submodule "pages/frontend"]
+	path = pages/frontend
+	url = git@github.com:mariogemoll/gen3dchat-frontend.git
