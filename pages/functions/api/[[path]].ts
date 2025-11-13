@@ -236,7 +236,15 @@ class CloudflareKVSaver extends BaseCheckpointSaver {
 
 // JSCAD code validator
 async function validateCode(code: string, validationServiceUrl: string): Promise<{ valid: boolean; error?: string }> {
+  console.log('=== VALIDATION SERVICE CALL ===')
+  console.log('Service URL:', validationServiceUrl)
+  console.log('Code length:', code.length)
+  console.log('Code preview:', code.substring(0, 200) + (code.length > 200 ? '...' : ''))
+
   const result = await validateJscadCode(code, validationServiceUrl)
+
+  console.log('Validation result:', JSON.stringify(result, null, 2))
+  console.log('===============================')
 
   if (result.ok) {
     return { valid: true }
@@ -318,9 +326,10 @@ app.post('/threads', async (c) => {
   // Initialize LLM
   const llm = new ChatOpenAI({
     // model: 'gpt-4o-mini',
-    model: 'gpt-5-chat-latest',
+    // model: 'gpt-5-mini-2025-08-07',
+    model: 'gpt-5-nano-2025-08-07',
     apiKey: c.env.OPENAI_API_KEY,
-    temperature: 0.7,
+    // temperature: 0.7,
   })
 
   // Node: Handle user code update (validation already done before graph invocation)
@@ -392,7 +401,17 @@ app.post('/threads', async (c) => {
 
   // Node: Validate code
   const validateCodeNode = async (state: typeof StateAnnotation.State) => {
+    console.log('=== VALIDATE CODE NODE ===')
+    console.log('Current retry count:', state.validationRetries || 0)
+    console.log('Is user code update:', state.isUserCodeUpdate)
+
     const validation = await validateCode(state.currentCode || '', c.env.JSCAD_VALIDATION_SERVICE_URL)
+
+    console.log('Validation valid:', validation.valid)
+    if (!validation.valid) {
+      console.log('Validation error:', validation.error)
+    }
+    console.log('==========================')
 
     if (validation.valid) {
       // Valid! Just update state, don't add validation message
@@ -413,14 +432,23 @@ app.post('/threads', async (c) => {
 
   // Routing function: decide next step after validation
   const routeAfterValidation = async (state: typeof StateAnnotation.State): Promise<string> => {
+    console.log('=== ROUTE AFTER VALIDATION ===')
     const validation = await validateCode(state.currentCode || '', c.env.JSCAD_VALIDATION_SERVICE_URL)
 
+    console.log('Validation valid:', validation.valid)
+    console.log('Is user code update:', state.isUserCodeUpdate)
+    console.log('Current retries:', state.validationRetries || 0)
+
     if (validation.valid) {
+      console.log('Routing decision: END (valid code)')
+      console.log('==============================')
       return '__end__'
     }
 
     // If it's a user code update, don't retry - just fail
     if (state.isUserCodeUpdate) {
+      console.log('Routing decision: VALIDATION_FAILED (user code)')
+      console.log('==============================')
       return 'validationFailed'
     }
 
@@ -428,10 +456,14 @@ app.post('/threads', async (c) => {
     const retries = state.validationRetries || 0
     if (retries >= 3) {
       // Max retries reached - give up
+      console.log('Routing decision: VALIDATION_FAILED (max retries)')
+      console.log('==============================')
       return 'validationFailed'
     }
 
     // Retry generation
+    console.log('Routing decision: RETRY (attempt', retries + 1, 'of 3)')
+    console.log('==============================')
     return 'generateCode'
   }
 
@@ -513,9 +545,21 @@ app.post('/threads', async (c) => {
   // This prevents creating unnecessary checkpoints for invalid code
   const isCodeUpdate = message.includes('```')
   if (isCodeUpdate) {
+    console.log('=== PRE-VALIDATION (User Code Update) ===')
     const codeBlockMatch = message.match(/```(?:javascript|js|jscad)?\n([\s\S]*?)\n```/)
     const code = codeBlockMatch ? codeBlockMatch[1] : message
+    console.log('Extracted code length:', code.length)
+
     const validation = await validateCode(code, c.env.JSCAD_VALIDATION_SERVICE_URL)
+
+    console.log('Pre-validation result:', validation.valid ? 'VALID' : 'INVALID')
+    if (!validation.valid) {
+      console.log('Pre-validation error:', validation.error)
+      console.log('Returning error without creating checkpoint')
+    } else {
+      console.log('Pre-validation passed, proceeding to graph')
+    }
+    console.log('==========================================')
 
     if (!validation.valid) {
       // Return error immediately without creating a checkpoint
