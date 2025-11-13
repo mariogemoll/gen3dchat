@@ -28,3 +28,10 @@ CREATE TABLE IF NOT EXISTS threads (
 
 -- Index for faster session lookups
 CREATE INDEX IF NOT EXISTS idx_threads_session ON threads(session_id);
+
+-- Daily usage tracking table for LLM call limits
+CREATE TABLE IF NOT EXISTS daily_usage (
+  date TEXT PRIMARY KEY,  -- YYYY-MM-DD format
+  llm_call_count INTEGER NOT NULL DEFAULT 0,
+  last_updated INTEGER NOT NULL
+);

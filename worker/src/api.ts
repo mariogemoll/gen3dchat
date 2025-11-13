@@ -10,6 +10,7 @@ import { Client } from 'langsmith'
 import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain'
 import Sqids from 'sqids'
 import { validateJscadCode } from './jscad-validator'
+import { checkDailyLimit, incrementUsage } from './usage-tracker'
 
 interface Env {
   CHAT_HISTORY: any
@@ -22,6 +23,7 @@ interface Env {
   SQIDS_CHECKPOINT_ALPHABET: string
   SYSTEM_PROMPT: string
   JSCAD_VALIDATION_SERVICE_URL: string
+  DAILY_LLM_CALL_LIMIT?: string
 }
 
 // Validate required environment variables
@@ -285,6 +287,26 @@ app.use('*', async (c, next) => {
   await next()
 })
 
+// Middleware to check daily LLM call limits on API routes
+app.use('/_/*', async (c, next) => {
+  // Parse limit from environment variable
+  const maxLLMCalls = c.env.DAILY_LLM_CALL_LIMIT ? parseInt(c.env.DAILY_LLM_CALL_LIMIT, 10) : undefined
+
+  // Check if limit is configured
+  if (maxLLMCalls !== undefined) {
+    const limitCheck = await checkDailyLimit(c.env.DB, maxLLMCalls)
+
+    if (limitCheck.exceeded) {
+      return c.json({
+        error: 'Daily limit reached',
+        message: 'The daily resource limit has been reached. Please try again tomorrow.'
+      }, 429) // 429 Too Many Requests
+    }
+  }
+
+  await next()
+})
+
 app.get('/_/hello', (c) => c.json({ ok: true, time: new Date().toISOString() }))
 
 app.post('/_/echo', async (c) => {
@@ -378,6 +400,9 @@ app.post('/_/threads', async (c) => {
     console.log('=====================')
 
     const response = await llm.invoke(messagesToSend)
+
+    // Increment LLM call counter
+    await incrementUsage(c.env.DB)
 
     // Extract code from response
     const responseContent = typeof response.content === 'string' ? response.content : ''
