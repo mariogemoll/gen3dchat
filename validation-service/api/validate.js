@@ -1,10 +1,10 @@
 // Validation API endpoint for Vercel Functions
-import { getQuickJS } from 'quickjs-emscripten'
 import * as acorn from 'acorn'
 import * as walk from 'acorn-walk'
+import jscad from '@jscad/modeling'
+import vm from 'vm'
 
-// Cache QuickJS module across invocations
-let cachedQuickJS = null
+const { primitives, booleans, transforms, colors, hulls, extrusions } = jscad
 
 /**
  * Static AST validation to block dangerous operations
@@ -64,185 +64,48 @@ function validateAst(code) {
 }
 
 /**
- * JSCAD primitives available to user code
+ * Execute JSCAD code in isolated VM context with real JSCAD library
  */
-const JSCAD_PRIMITIVES = `
-// Basic 3D primitives
-function cube(options) {
-  if (typeof options === 'number') {
-    return { type: 'geom3', primitiveType: 'cube', size: [options, options, options] };
+function executeJscadInSandbox(code) {
+  // Create sandbox context with JSCAD API
+  const sandbox = {
+    // Expose entire JSCAD modeling module
+    jscadModeling: jscad,
+
+    // Provide safe built-ins
+    Array: Array,
+    Object: Object,
+    Math: Math,
+    console: {
+      log: () => {}, // Disable console.log
+      error: () => {},
+      warn: () => {},
+    },
   }
-  return {
-    type: 'geom3',
-    primitiveType: 'cube',
-    size: options?.size || [1, 1, 1],
-    center: options?.center
-  };
+
+  // Wrap user code to call main() and return result
+  const wrappedCode = `
+${code}
+
+if (typeof main !== 'function') {
+  throw new Error('Code must define a main() function');
 }
 
-function sphere(options) {
-  return {
-    type: 'geom3',
-    primitiveType: 'sphere',
-    radius: options?.radius || 1,
-    segments: options?.segments || 32,
-    center: options?.center
-  };
-}
-
-function cylinder(options) {
-  return {
-    type: 'geom3',
-    primitiveType: 'cylinder',
-    radius: options?.radius || 1,
-    height: options?.height || 1,
-    center: options?.center
-  };
-}
-
-function cuboid(options) {
-  return {
-    type: 'geom3',
-    primitiveType: 'cuboid',
-    size: options?.size || [1, 1, 1],
-    center: options?.center
-  };
-}
-
-function roundedCuboid(options) {
-  return {
-    type: 'geom3',
-    primitiveType: 'roundedCuboid',
-    size: options?.size || [1, 1, 1],
-    roundRadius: options?.roundRadius || 0.2,
-    center: options?.center
-  };
-}
-
-function cylinderElliptic(options) {
-  return {
-    type: 'geom3',
-    primitiveType: 'cylinderElliptic',
-    height: options?.height || 1,
-    startRadius: options?.startRadius || [1, 1],
-    endRadius: options?.endRadius || [1, 1],
-    center: options?.center
-  };
-}
-
-function ellipsoid(options) {
-  return {
-    type: 'geom3',
-    primitiveType: 'ellipsoid',
-    radius: options?.radius || [1, 1, 1],
-    center: options?.center
-  };
-}
-
-function geodesicSphere(options) {
-  return {
-    type: 'geom3',
-    primitiveType: 'geodesicSphere',
-    radius: options?.radius || 1,
-    frequency: options?.frequency || 6
-  };
-}
-
-function torus(options) {
-  return {
-    type: 'geom3',
-    primitiveType: 'torus',
-    innerRadius: options?.innerRadius || 0.5,
-    outerRadius: options?.outerRadius || 1,
-    innerSegments: options?.innerSegments || 32,
-    outerSegments: options?.outerSegments || 32
-  };
-}
-
-// Boolean operations
-function union(...geometries) {
-  return { type: 'geom3', operation: 'union', geometries: geometries.flat() };
-}
-
-function subtract(...geometries) {
-  return { type: 'geom3', operation: 'subtract', geometries: geometries.flat() };
-}
-
-function intersect(...geometries) {
-  return { type: 'geom3', operation: 'intersect', geometries: geometries.flat() };
-}
-
-// Transformations
-function translate(offset, ...geometries) {
-  return { type: 'geom3', operation: 'translate', offset, geometries: geometries.flat() };
-}
-
-function rotate(angles, ...geometries) {
-  return { type: 'geom3', operation: 'rotate', angles, geometries: geometries.flat() };
-}
-
-function scale(factors, ...geometries) {
-  return { type: 'geom3', operation: 'scale', factors, geometries: geometries.flat() };
-}
-
-function center(options, ...geometries) {
-  return { type: 'geom3', operation: 'center', options, geometries: geometries.flat() };
-}
-
-function mirror(options, ...geometries) {
-  return { type: 'geom3', operation: 'mirror', options, geometries: geometries.flat() };
-}
-
-// Color
-function colorize(color, ...geometries) {
-  return { type: 'geom3', operation: 'colorize', color, geometries: geometries.flat() };
-}
-
-// Hulls
-function hull(...geometries) {
-  return { type: 'geom3', operation: 'hull', geometries: geometries.flat() };
-}
-
-function hullChain(...geometries) {
-  return { type: 'geom3', operation: 'hullChain', geometries: geometries.flat() };
-}
-
-// Extrusions
-function extrudeLinear(options, geometry) {
-  return { type: 'geom3', operation: 'extrudeLinear', options, geometry };
-}
-
-function extrudeRotate(options, geometry) {
-  return { type: 'geom3', operation: 'extrudeRotate', options, geometry };
-}
-
-// 2D Primitives
-function circle(options) {
-  return { type: 'geom2', primitiveType: 'circle', radius: options?.radius || 1 };
-}
-
-function square(options) {
-  return { type: 'geom2', primitiveType: 'square', size: options?.size || [1, 1] };
-}
-
-function rectangle(options) {
-  return { type: 'geom2', primitiveType: 'rectangle', size: options?.size || [1, 1] };
-}
-
-function roundedRectangle(options) {
-  return { type: 'geom2', primitiveType: 'roundedRectangle', size: options?.size || [1, 1], roundRadius: options?.roundRadius || 0.2 };
-}
-
-function polygon(options) {
-  return { type: 'geom2', primitiveType: 'polygon', points: options?.points || [] };
-}
+main();
 `
 
+  // Execute in isolated context with timeout
+  return vm.runInNewContext(wrappedCode, sandbox, {
+    timeout: 5000, // 5 second timeout
+    displayErrors: true,
+  })
+}
+
 /**
- * Validate JSCAD code in QuickJS sandbox
+ * Validate JSCAD code
  */
 async function validateJscadCode(code) {
-  // 1) AST validation first
+  // 1) AST validation first - blocks all dangerous operations
   try {
     validateAst(code)
   } catch (e) {
@@ -253,73 +116,28 @@ async function validateJscadCode(code) {
     }
   }
 
-  // 2) Execute in QuickJS VM
+  // 2) Execute with real JSCAD in sandboxed VM
   try {
-    if (!cachedQuickJS) {
-      cachedQuickJS = await getQuickJS()
-    }
+    const geometry = executeJscadInSandbox(code)
 
-    const vm = cachedQuickJS.newContext()
-
-    // Set limits
-    try {
-      if (vm.runtime?.setMemoryLimit) {
-        vm.runtime.setMemoryLimit(50 * 1024 * 1024) // 50MB
-      }
-      if (vm.runtime?.setMaxStackSize) {
-        vm.runtime.setMaxStackSize(5 * 1024 * 1024) // 5MB
-      }
-    } catch (e) {
-      console.warn('Could not set QuickJS limits:', e)
-    }
-
-    const fullCode = `
-${JSCAD_PRIMITIVES}
-
-// User code
-${code}
-
-// Execute
-if (typeof main !== 'function') {
-  throw new Error('Code must define a main() function');
-}
-main();
-`
-
-    const result = vm.evalCode(fullCode)
-
-    if (result.error) {
-      const errorValue = vm.dump(result.error)
-      vm.unwrapResult(result).dispose()
-      vm.dispose()
-      return {
-        ok: false,
-        phase: 'execute',
-        error: String(errorValue)
-      }
-    }
-
-    const value = vm.dump(result.value)
-    vm.unwrapResult(result).dispose()
-    vm.dispose()
-
+    // Validate the returned geometry
     const isValidGeometry =
-      value &&
-      typeof value === 'object' &&
-      (value.type === 'geom2' || value.type === 'geom3')
+      geometry &&
+      typeof geometry === 'object' &&
+      geometry.polygons &&
+      Array.isArray(geometry.polygons)
 
     if (!isValidGeometry) {
       return {
         ok: false,
         phase: 'execute',
-        error: `main() must return a JSCAD geometry object (geom2 or geom3), got: ${typeof value}`
+        error: `main() must return a JSCAD geometry object with polygons, got: ${typeof geometry}`
       }
     }
 
     return {
       ok: true,
-      resultType: value.type,
-      geometry: value
+      geometry: geometry
     }
   } catch (e) {
     return {
@@ -333,6 +151,8 @@ main();
 /**
  * Vercel Function handler
  */
+export { validateJscadCode }
+
 export default async function handler(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*')
