@@ -1,0 +1,30 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "gen3dchat",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-11-11",
+	"compatibility_flags": [
+		"global_fetch_strictly_public",
+        "nodejs_compat"
+	],
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"kv_namespaces": [
+		{
+			"binding": "CHAT_HISTORY",
+			"id": "KV_NAMESPACE_ID"
+		}
+	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "DATABASE_NAME",
+			"database_id": "DATABASE_ID"
+		}
+	]
+}

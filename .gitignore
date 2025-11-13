@@ -1,7 +1,6 @@
 .claude
+.vscode
+.wrangler
 node_modules
-/pages/.wrangler
-/pages/.dev.vars
-/pages/package-lock.json
-/pages/pnpm-lock.yaml
-/pages/wrangler.toml
+package-lock.json
+pnpm-lock.yaml

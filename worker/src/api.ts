@@ -1,6 +1,5 @@
 // functions/api/[[path]].ts
 import { Hono } from 'hono'
-import { handle } from 'hono/cloudflare-pages'
 import { getCookie, setCookie } from 'hono/cookie'
 import { ChatOpenAI } from '@langchain/openai'
 import { BaseMessage, HumanMessage, AIMessage } from '@langchain/core/messages'
@@ -10,7 +9,7 @@ import type { Checkpoint, CheckpointMetadata, CheckpointTuple } from '@langchain
 import { Client } from 'langsmith'
 import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain'
 import Sqids from 'sqids'
-import { validateJscadCode } from '../lib/jscad-validator'
+import { validateJscadCode } from './jscad-validator'
 
 interface Env {
   CHAT_HISTORY: any
@@ -278,7 +277,7 @@ const StateAnnotation = Annotation.Root({
   }),
 })
 
-const app = new Hono<{ Bindings: Env }>().basePath('/api')
+const app = new Hono<{ Bindings: Env }>()
 
 // Middleware to validate environment on first request
 app.use('*', async (c, next) => {
@@ -286,14 +285,14 @@ app.use('*', async (c, next) => {
   await next()
 })
 
-app.get('/hello', (c) => c.json({ ok: true, time: new Date().toISOString() }))
+app.get('/_/hello', (c) => c.json({ ok: true, time: new Date().toISOString() }))
 
-app.post('/echo', async (c) => {
+app.post('/_/echo', async (c) => {
   const body = await c.req.json().catch(() => ({}))
   return c.json({ you_sent: body })
 })
 
-app.post('/threads', async (c) => {
+app.post('/_/threads', async (c) => {
   const { message, threadId } = await c.req.json()
 
   if (!message) {
@@ -614,7 +613,7 @@ app.post('/threads', async (c) => {
   })
 })
 
-app.get('/threads/:threadId/:checkpointId', async (c) => {
+app.get('/_/threads/:threadId/:checkpointId', async (c) => {
   const threadId = c.req.param('threadId')
   const checkpointSqid = c.req.param('checkpointId')
 
@@ -643,7 +642,7 @@ app.get('/threads/:threadId/:checkpointId', async (c) => {
   })
 })
 
-app.delete('/threads/:threadId', async (c) => {
+app.delete('/_/threads/:threadId', async (c) => {
   const threadId = c.req.param('threadId')
 
   // Get session and verify ownership
@@ -666,4 +665,5 @@ app.delete('/threads/:threadId', async (c) => {
   return c.json({ ok: true, message: 'Thread cleared' })
 })
 
-export const onRequest = handle(app)
+// export const onRequest = handle(app)
+export default app
