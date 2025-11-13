@@ -1,0 +1,8 @@
+{
+	"name": "gen3dchat-worker",
+	"version": "0.0.0",
+	"devDependencies": {
+		"typescript": "^5.5.2",
+		"wrangler": "^4.48.0"
+	}
+}
