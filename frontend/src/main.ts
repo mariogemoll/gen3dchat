@@ -29,7 +29,7 @@ async function saveCode(): Promise<boolean> {
 
   try {
     const { data, isOwner } = await sendMessage(
-      '```simple\n' + code + '\n```',
+      '```javascript\n' + code + '\n```',
       state.threadId
     )
 

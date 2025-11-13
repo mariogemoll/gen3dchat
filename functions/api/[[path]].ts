@@ -10,8 +10,7 @@ import type { Checkpoint, CheckpointMetadata, CheckpointTuple } from '@langchain
 import { Client } from 'langsmith'
 import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain'
 import Sqids from 'sqids'
-import { buildJscadFromSpec } from 'buildspec/converter'
-import { validateSpec } from 'buildspec'
+import { validateJscadCode } from '../lib/jscad-validator'
 
 interface Env {
   CHAT_HISTORY: any
@@ -23,6 +22,7 @@ interface Env {
   SQIDS_THREAD_ALPHABET: string
   SQIDS_CHECKPOINT_ALPHABET: string
   SYSTEM_PROMPT: string
+  JSCAD_VALIDATION_SERVICE_URL: string
 }
 
 // Validate required environment variables
@@ -234,22 +234,17 @@ class CloudflareKVSaver extends BaseCheckpointSaver {
   }
 }
 
-// BuildSpec syntax validator
-function validateCode(code: string): { valid: boolean; error?: string } {
-  try {
-    // Parse the JSON
-    const parsed = JSON.parse(code)
+// JSCAD code validator
+async function validateCode(code: string, validationServiceUrl: string): Promise<{ valid: boolean; error?: string }> {
+  const result = await validateJscadCode(code, validationServiceUrl)
 
-    // Validate using BuildSpec schema
-    const validated = validateSpec(parsed)
-
-    // Try to build JSCAD geometry to catch any conversion errors
-    buildJscadFromSpec(validated.root)
-
+  if (result.ok) {
     return { valid: true }
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Invalid BuildSpec JSON'
-    return { valid: false, error: errorMessage }
+  } else {
+    return {
+      valid: false,
+      error: `${result.phase}: ${result.error}`
+    }
   }
 }
 
@@ -322,7 +317,8 @@ app.post('/threads', async (c) => {
 
   // Initialize LLM
   const llm = new ChatOpenAI({
-    model: 'gpt-4o-mini',
+    // model: 'gpt-4o-mini',
+    model: 'gpt-5-chat-latest',
     apiKey: c.env.OPENAI_API_KEY,
     temperature: 0.7,
   })
@@ -334,7 +330,7 @@ app.post('/threads', async (c) => {
     const content = typeof lastMessage.content === 'string' ? lastMessage.content : ''
 
     // Check if message contains code block
-    const codeBlockMatch = content.match(/```(?:json|buildspec)?\n([\s\S]*?)\n```/)
+    const codeBlockMatch = content.match(/```(?:javascript|js|jscad)?\n([\s\S]*?)\n```/)
     const code = codeBlockMatch ? codeBlockMatch[1] : content
 
     // Just update code, no message added (already validated outside graph)
@@ -358,7 +354,7 @@ app.post('/threads', async (c) => {
 
     // If there's a validation error from a previous attempt, append it as the last user message
     if (state.lastValidationError) {
-      messagesToSend.push(new HumanMessage(`The previous BuildSpec had an error: ${state.lastValidationError}\n\nPlease fix the error and generate a corrected version.`))
+      messagesToSend.push(new HumanMessage(`The previous JSCAD code had an error: ${state.lastValidationError}\n\nPlease fix the error and generate a corrected version.`))
     }
 
     // Log the messages being sent to LLM
@@ -377,7 +373,7 @@ app.post('/threads', async (c) => {
 
     // Extract code from response
     const responseContent = typeof response.content === 'string' ? response.content : ''
-    const codeBlockMatch = responseContent.match(/```(?:json|buildspec)?\n([\s\S]*?)\n```/)
+    const codeBlockMatch = responseContent.match(/```(?:javascript|js|jscad)?\n([\s\S]*?)\n```/)
 
     if (codeBlockMatch) {
       return {
@@ -396,7 +392,7 @@ app.post('/threads', async (c) => {
 
   // Node: Validate code
   const validateCodeNode = async (state: typeof StateAnnotation.State) => {
-    const validation = validateCode(state.currentCode || '')
+    const validation = await validateCode(state.currentCode || '', c.env.JSCAD_VALIDATION_SERVICE_URL)
 
     if (validation.valid) {
       // Valid! Just update state, don't add validation message
@@ -416,8 +412,8 @@ app.post('/threads', async (c) => {
   }
 
   // Routing function: decide next step after validation
-  const routeAfterValidation = (state: typeof StateAnnotation.State): string => {
-    const validation = validateCode(state.currentCode || '')
+  const routeAfterValidation = async (state: typeof StateAnnotation.State): Promise<string> => {
+    const validation = await validateCode(state.currentCode || '', c.env.JSCAD_VALIDATION_SERVICE_URL)
 
     if (validation.valid) {
       return '__end__'
@@ -517,9 +513,9 @@ app.post('/threads', async (c) => {
   // This prevents creating unnecessary checkpoints for invalid code
   const isCodeUpdate = message.includes('```')
   if (isCodeUpdate) {
-    const codeBlockMatch = message.match(/```(?:json|buildspec)?\n([\s\S]*?)\n```/)
+    const codeBlockMatch = message.match(/```(?:javascript|js|jscad)?\n([\s\S]*?)\n```/)
     const code = codeBlockMatch ? codeBlockMatch[1] : message
-    const validation = validateCode(code)
+    const validation = await validateCode(code, c.env.JSCAD_VALIDATION_SERVICE_URL)
 
     if (!validation.valid) {
       // Return error immediately without creating a checkpoint

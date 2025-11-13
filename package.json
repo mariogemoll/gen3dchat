@@ -16,7 +16,6 @@
     "@langchain/langgraph": "^1.0.1",
     "@langchain/langgraph-checkpoint": "^1.0.0",
     "@langchain/openai": "^1.0.0",
-    "buildspec": "mariogemoll/gen3dchat-buildspec#32296513045eccabf3e3ca36f12c402bd7cda84f",
     "hono": "^4.6.0",
     "langsmith": "^0.3.79",
     "openai": "^6.8.1",
