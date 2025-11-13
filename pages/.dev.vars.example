@@ -1,0 +1,16 @@
+# OpenAI API Key (required)
+OPENAI_API_KEY=sk-proj-your-key-here
+
+# Sqids Alphabets for ID encoding (required)
+# Generate by shuffling: abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+# IMPORTANT: Use different shuffles for thread and checkpoint alphabets
+SQIDS_THREAD_ALPHABET=your-shuffled-alphabet-here
+SQIDS_CHECKPOINT_ALPHABET=your-different-shuffled-alphabet-here
+
+# JSCAD Validation Service URL (required for local development)
+JSCAD_VALIDATION_SERVICE_URL=http://localhost:3000/api/validate
+
+# LangSmith Tracing (optional)
+# LANGCHAIN_TRACING_V2=true
+# LANGCHAIN_API_KEY=your-langsmith-key-here
+# LANGCHAIN_PROJECT=gen3dchat-dev
