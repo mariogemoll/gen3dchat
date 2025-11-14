@@ -1,156 +1,22 @@
 import { ChatAnthropic } from '@langchain/anthropic'
 import { BaseMessage, HumanMessage, AIMessage } from '@langchain/core/messages'
 import { StateGraph, Annotation, messagesStateReducer } from '@langchain/langgraph'
-import { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint'
-import type { Checkpoint, CheckpointMetadata, CheckpointTuple } from '@langchain/langgraph-checkpoint'
 import { Client } from 'langsmith'
 import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain'
-import Sqids from 'sqids'
 import { validateJscadCode } from './jscad-validator'
 import { incrementUsage } from './usage-tracker'
+import { CloudflareKVSaver } from './kv'
+import type { DbEnv } from './db'
 
 // Environment interface for agent needs
-export interface AgentEnv {
+export interface AgentEnv extends DbEnv {
   CHAT_HISTORY: any
-  DB: any
   ANTHROPIC_API_KEY: string
   LANGCHAIN_TRACING_V2?: string
   LANGCHAIN_API_KEY?: string
   LANGCHAIN_PROJECT?: string
-  SQIDS_THREAD_ALPHABET: string
-  SQIDS_CHECKPOINT_ALPHABET: string
   SYSTEM_PROMPT: string
   JSCAD_VALIDATION_SERVICE_URL: string
-}
-
-// Helper to get Sqids instance with environment-specific alphabet
-function getThreadSqids(env: AgentEnv): Sqids {
-  return new Sqids({
-    alphabet: env.SQIDS_THREAD_ALPHABET,
-    minLength: 6,
-  })
-}
-
-function getCheckpointSqids(env: AgentEnv): Sqids {
-  return new Sqids({
-    alphabet: env.SQIDS_CHECKPOINT_ALPHABET,
-    minLength: 6,
-  })
-}
-
-// Helper functions for ID generation using atomic counters
-export async function getNextThreadId(db: any, env: AgentEnv): Promise<string> {
-  const result = await db
-    .prepare('UPDATE counters SET value = value + 1 WHERE name = ? RETURNING value')
-    .bind('thread_id')
-    .first()
-
-  const counter = result?.value || 1
-  const sqids = getThreadSqids(env)
-  return sqids.encode([counter])
-}
-
-export async function getNextCheckpointId(db: any, env: AgentEnv): Promise<string> {
-  const result = await db
-    .prepare('UPDATE counters SET value = value + 1 WHERE name = ? RETURNING value')
-    .bind('checkpoint_id')
-    .first()
-
-  const counter = result?.value || 1
-  const sqids = getCheckpointSqids(env)
-  return sqids.encode([counter])
-}
-
-export async function storeCheckpointIdMapping(db: any, sqid: string, uuid: string): Promise<void> {
-  const now = Date.now()
-  await db
-    .prepare('INSERT OR IGNORE INTO checkpoint_ids (sqid, uuid, created_at) VALUES (?, ?, ?)')
-    .bind(sqid, uuid, now)
-    .run()
-}
-
-export async function getUuidFromSqid(db: any, sqid: string): Promise<string | null> {
-  const result = await db
-    .prepare('SELECT uuid FROM checkpoint_ids WHERE sqid = ?')
-    .bind(sqid)
-    .first()
-  return result?.uuid || null
-}
-
-export async function getSqidFromUuid(db: any, uuid: string): Promise<string | null> {
-  const result = await db
-    .prepare('SELECT sqid FROM checkpoint_ids WHERE uuid = ?')
-    .bind(uuid)
-    .first()
-  return result?.sqid || null
-}
-
-// Custom Cloudflare KV checkpoint saver
-export class CloudflareKVSaver extends BaseCheckpointSaver {
-  constructor(private kv: any, private db: any, private env: AgentEnv) {
-    super()
-  }
-
-  async getTuple(config: { configurable?: { thread_id: string } }): Promise<CheckpointTuple | undefined> {
-    const threadId = config.configurable?.thread_id
-    if (!threadId) return undefined
-
-    const key = `checkpoint:${threadId}:latest`
-    const data = await this.kv.get(key, 'json') as CheckpointTuple | null
-    return data || undefined
-  }
-
-  async getCheckpointById(threadId: string, checkpointId: string): Promise<CheckpointTuple | undefined> {
-    const key = `checkpoint:${threadId}:${checkpointId}`
-    const data = await this.kv.get(key, 'json') as CheckpointTuple | null
-    return data || undefined
-  }
-
-  async *list(config: { configurable?: { thread_id: string } }) {
-    const tuple = await this.getTuple(config)
-    if (tuple) {
-      yield tuple
-    }
-  }
-
-  async put(config: { configurable?: { thread_id: string } }, checkpoint: Checkpoint, metadata: CheckpointMetadata): Promise<{ configurable: { thread_id: string } }> {
-    const threadId = config.configurable?.thread_id || await getNextThreadId(this.db, this.env)
-    const checkpointUuid = checkpoint.id
-
-    // Generate Sqids checkpoint ID and store the mapping
-    const checkpointSqid = await getNextCheckpointId(this.db, this.env)
-    await storeCheckpointIdMapping(this.db, checkpointSqid, checkpointUuid)
-
-    // Store checkpoint with UUID (LangGraph's internal ID)
-    const specificKey = `checkpoint:${threadId}:${checkpointUuid}`
-    // Also store as latest
-    const latestKey = `checkpoint:${threadId}:latest`
-
-    const tuple: CheckpointTuple = {
-      config: { configurable: { thread_id: threadId } },
-      checkpoint,
-      metadata,
-      parentConfig: config.configurable?.thread_id ? config : undefined,
-    }
-
-    // Store both the specific checkpoint and update latest
-    await Promise.all([
-      this.kv.put(specificKey, JSON.stringify(tuple)),
-      this.kv.put(latestKey, JSON.stringify(tuple))
-    ])
-
-    return { configurable: { thread_id: threadId } }
-  }
-
-  async putWrites(config: { configurable?: { thread_id: string } }, writes: any[], taskId: string): Promise<void> {
-    // Not needed for basic implementation
-  }
-
-  async deleteThread(threadId: string): Promise<void> {
-    // Note: This only deletes the latest checkpoint
-    // In a production system, you'd want to list and delete all checkpoints for this thread
-    await this.kv.delete(`checkpoint:${threadId}:latest`)
-  }
 }
 
 // JSCAD code validator

@@ -3,16 +3,22 @@ import { getCookie, setCookie } from 'hono/cookie'
 import { HumanMessage } from '@langchain/core/messages'
 import { checkDailyLimit } from './usage-tracker'
 import {
-  CloudflareKVSaver,
   createAgent,
   createLangSmithCallbacks,
   flushLangSmithTraces,
-  getNextThreadId,
-  getSqidFromUuid,
-  getUuidFromSqid,
   preValidateUserCode,
   type AgentEnv,
 } from './agent'
+import { CloudflareKVSaver } from './kv'
+import {
+  createThread,
+  deleteThread,
+  getNextThreadId,
+  getSqidFromUuid,
+  getUuidFromSqid,
+  updateThreadTimestamp,
+  verifyThreadOwnership,
+} from './db'
 
 interface Env extends AgentEnv {
   DAILY_LLM_CALL_LIMIT?: string
@@ -68,31 +74,6 @@ async function getOrCreateSession(c: any): Promise<string> {
   }
 
   return sessionId
-}
-
-async function verifyThreadOwnership(db: any, threadId: string, sessionId: string): Promise<boolean> {
-  const result = await db
-    .prepare('SELECT session_id FROM threads WHERE id = ?')
-    .bind(threadId)
-    .first()
-
-  return result?.session_id === sessionId
-}
-
-async function createThread(db: any, threadId: string, sessionId: string): Promise<void> {
-  const now = Date.now()
-  await db
-    .prepare('INSERT INTO threads (id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?)')
-    .bind(threadId, sessionId, now, now)
-    .run()
-}
-
-async function updateThreadTimestamp(db: any, threadId: string): Promise<void> {
-  const now = Date.now()
-  await db
-    .prepare('UPDATE threads SET updated_at = ? WHERE id = ?')
-    .bind(now, threadId)
-    .run()
 }
 
 const app = new Hono<{ Bindings: Env }>()
@@ -266,10 +247,7 @@ app.delete('/_/threads/:threadId', async (c) => {
   await checkpointer.deleteThread(threadId)
 
   // Also delete from DB
-  await c.env.DB
-    .prepare('DELETE FROM threads WHERE id = ?')
-    .bind(threadId)
-    .run()
+  await deleteThread(c.env.DB, threadId)
 
   return c.json({ ok: true, message: 'Thread cleared' })
 })
