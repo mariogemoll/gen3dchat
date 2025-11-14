@@ -1,3 +1,6 @@
 .dev.vars
 worker-configuration.d.ts
 wrangler.jsonc
+
+# LangGraph API
+.langgraph_api

@@ -26,7 +26,7 @@ describe('agent graph', () => {
     );
   });
 
-  it('should handle user prompt without validation', async () => {
+  it('should handle user prompt and throw on proposeChange', async () => {
     const graph = buildGraph({ validator: new MockValidator() });
     const initialState = {
       changeHistory: [],
@@ -36,10 +36,9 @@ describe('agent graph', () => {
       stagingIterations: [],
     };
 
-    const result = await graph.invoke(initialState);
-
-    expect(result.userPrompt).toBe('Update variable name');
-    expect(result.userUpdate).toBeUndefined();
+    await expect(graph.invoke(initialState)).rejects.toThrow(
+      'proposeChange not yet implemented'
+    );
   });
 
   it('should validate user update with valid code', async () => {
@@ -81,7 +80,7 @@ describe('agent graph', () => {
     expect(result.userUpdate?.validationErrors).toBe('Syntax error: unexpected token');
   });
 
-  it('should preserve change history', async () => {
+  it('should preserve change history in state', async () => {
     const graph = buildGraph({ validator: new MockValidator() });
     const changeHistory = [
       {
@@ -94,8 +93,10 @@ describe('agent graph', () => {
     const initialState = {
       changeHistory,
       lastValidCode: 'const x = 1;',
-      userPrompt: 'Another change',
-      userUpdate: undefined,
+      userPrompt: undefined,
+      userUpdate: {
+        code: 'const y = 2;',
+      },
       stagingIterations: [],
     };
 
@@ -124,8 +125,10 @@ describe('agent graph', () => {
     const initialState = {
       changeHistory: [],
       lastValidCode: 'const x = 1;',
-      userPrompt: 'Update again',
-      userUpdate: undefined,
+      userPrompt: undefined,
+      userUpdate: {
+        code: 'const z = 3;',
+      },
       stagingIterations,
     };
 
@@ -152,5 +155,76 @@ describe('agent graph', () => {
 
     // Validation should override the old error with undefined (no error found)
     expect(result.userUpdate?.validationErrors).toBeUndefined();
+  });
+
+  // Tests for conditional routing
+  describe('conditional routing', () => {
+    it('should update lastValidCode and exit when validation passes and no prompt', async () => {
+      const graph = buildGraph({ validator: new MockValidator() });
+      const initialState = {
+        changeHistory: [],
+        lastValidCode: 'const x = 1;',
+        userPrompt: undefined,
+        userUpdate: {
+          code: 'const y = 2;',
+        },
+        stagingIterations: [],
+      };
+
+      const result = await graph.invoke(initialState);
+
+      expect(result.lastValidCode).toBe('const y = 2;');
+      expect(result.userUpdate?.validationErrors).toBeUndefined();
+    });
+
+    it('should exit immediately when validation fails', async () => {
+      const graph = buildGraph({ validator: new MockValidator('Syntax error') });
+      const initialState = {
+        changeHistory: [],
+        lastValidCode: 'const x = 1;',
+        userPrompt: undefined,
+        userUpdate: {
+          code: 'const y = ;',
+        },
+        stagingIterations: [],
+      };
+
+      const result = await graph.invoke(initialState);
+
+      expect(result.lastValidCode).toBe('const x = 1;'); // Should NOT update
+      expect(result.userUpdate?.validationErrors).toBe('Syntax error');
+    });
+
+    it('should route to proposeChange when prompt exists and throw error', async () => {
+      const graph = buildGraph({ validator: new MockValidator() });
+      const initialState = {
+        changeHistory: [],
+        lastValidCode: 'const x = 1;',
+        userPrompt: 'Make it better',
+        userUpdate: undefined,
+        stagingIterations: [],
+      };
+
+      await expect(graph.invoke(initialState)).rejects.toThrow(
+        'proposeChange not yet implemented'
+      );
+    });
+
+    it('should route to proposeChange even when valid update exists with prompt', async () => {
+      const graph = buildGraph({ validator: new MockValidator() });
+      const initialState = {
+        changeHistory: [],
+        lastValidCode: 'const x = 1;',
+        userPrompt: 'Update this code',
+        userUpdate: {
+          code: 'const y = 2;',
+        },
+        stagingIterations: [],
+      };
+
+      await expect(graph.invoke(initialState)).rejects.toThrow(
+        'proposeChange not yet implemented'
+      );
+    });
   });
 });

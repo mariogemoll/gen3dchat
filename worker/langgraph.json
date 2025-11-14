@@ -1,0 +1,9 @@
+{
+  "dockerfile_lines": [],
+  "dependencies": ["."],
+  "graphs": {
+    "agent": "./src/studio.ts:graph"
+  },
+  "env": ".dev.vars",
+  "langgraph_api_url": "https://api.eu.langchain.com"
+}

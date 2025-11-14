@@ -79,7 +79,7 @@ export class JscadValidator implements CodeValidator {
 }
 
 // Factory function to create validateUserUpdate with injectable validator
-export function createValidateUserUpdate(validator: CodeValidator) {
+function createValidateUserUpdate(validator: CodeValidator) {
   return async (state: State): Promise<State> => {
     // Runtime validation: ensure at least one input is provided
     if (!state.userPrompt && !state.userUpdate) {
@@ -103,12 +103,58 @@ export function createValidateUserUpdate(validator: CodeValidator) {
   };
 }
 
+// Node to update lastValidCode when validation passes
+function updateLastValidCode(state: State): State {
+  if (state.userUpdate && !state.userUpdate.validationErrors) {
+    return {
+      ...state,
+      lastValidCode: state.userUpdate.code,
+    };
+  }
+  return state;
+}
+
+// Placeholder node for proposing code changes based on user prompts (TBD)
+function proposeChange(state: State): State {
+  // TODO: Implement LLM-based change proposal
+  throw new Error('proposeChange not yet implemented');
+}
+
+// Conditional routing after validation
+function routeAfterValidation(state: State): string {
+  // If validation failed, end immediately
+  if (state.userUpdate?.validationErrors) {
+    return END;
+  }
+
+  // If validation passed and there's no prompt, update lastValidCode and end
+  if (state.userUpdate && !state.userUpdate.validationErrors && !state.userPrompt) {
+    return 'updateLastValidCode';
+  }
+
+  // If there's a prompt (with or without a valid update), propose changes
+  if (state.userPrompt) {
+    return 'proposeChange';
+  }
+
+  // Fallback (shouldn't happen due to validation, but be safe)
+  return END;
+}
+
 // Builder function to create the graph with injected dependencies
 export function buildGraph(config: { validator: CodeValidator }) {
   return new StateGraph(StateAnnotation)
     .addNode('validateUserUpdate', createValidateUserUpdate(config.validator))
+    .addNode('updateLastValidCode', updateLastValidCode)
+    .addNode('proposeChange', proposeChange)
     .addEdge(START, 'validateUserUpdate')
-    .addEdge('validateUserUpdate', END)
+    .addConditionalEdges('validateUserUpdate', routeAfterValidation, {
+      updateLastValidCode: 'updateLastValidCode',
+      proposeChange: 'proposeChange',
+      [END]: END,
+    })
+    .addEdge('updateLastValidCode', END)
+    .addEdge('proposeChange', END)
     .compile();
 }
 
