@@ -1,5 +1,13 @@
 import { StateGraph, START, END, Annotation } from '@langchain/langgraph';
 import { validateJscadCode } from './jscad-validator';
+import { CloudflareKVSaver } from './kv';
+import type { DbEnv } from './db';
+
+// Environment interface for agent needs
+export interface AgentEnv extends DbEnv {
+  CHAT_HISTORY: any;
+  JSCAD_VALIDATION_SERVICE_URL?: string;
+}
 
 interface ChangeHistoryItem {
   prompt: string;
@@ -142,8 +150,11 @@ function routeAfterValidation(state: State): string {
 }
 
 // Builder function to create the graph with injected dependencies
-export function buildGraph(config: { validator: CodeValidator }) {
-  return new StateGraph(StateAnnotation)
+export function buildGraph(config: {
+  validator: CodeValidator;
+  checkpointer?: CloudflareKVSaver;
+}) {
+  const graph = new StateGraph(StateAnnotation)
     .addNode('validateUserUpdate', createValidateUserUpdate(config.validator))
     .addNode('updateLastValidCode', updateLastValidCode)
     .addNode('proposeChange', proposeChange)
@@ -154,8 +165,12 @@ export function buildGraph(config: { validator: CodeValidator }) {
       [END]: END,
     })
     .addEdge('updateLastValidCode', END)
-    .addEdge('proposeChange', END)
-    .compile();
+    .addEdge('proposeChange', END);
+
+  // Compile with checkpointer if provided, otherwise compile without persistence
+  return config.checkpointer
+    ? graph.compile({ checkpointer: config.checkpointer as any })
+    : graph.compile();
 }
 
 export type { State, ValidStateInput };

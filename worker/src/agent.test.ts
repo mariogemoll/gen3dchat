@@ -11,6 +11,25 @@ class MockValidator implements CodeValidator {
 }
 
 describe('agent graph', () => {
+  it('should build graph without checkpointer', async () => {
+    const graph = buildGraph({ validator: new MockValidator() });
+    expect(graph).toBeDefined();
+  });
+
+  it('should build graph with checkpointer', async () => {
+    const mockCheckpointer = {
+      getTuple: vi.fn(),
+      put: vi.fn(),
+      list: vi.fn(),
+    } as any;
+
+    const graph = buildGraph({
+      validator: new MockValidator(),
+      checkpointer: mockCheckpointer
+    });
+    expect(graph).toBeDefined();
+  });
+
   it('should throw error when neither userPrompt nor userUpdate is provided', async () => {
     const graph = buildGraph({ validator: new MockValidator() });
     const initialState = {
