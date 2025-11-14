@@ -4,16 +4,20 @@
 	"scripts": {
 		"test": "vitest",
 		"test:ui": "vitest --ui",
-		"test:run": "vitest run"
+		"test:run": "vitest run",
+		"generate-openapi": "tsx src/scripts/generate-openapi-spec.ts"
 	},
 	"devDependencies": {
 		"@langchain/langgraph-cli": "^1.0.3",
 		"@vitest/ui": "^4.0.9",
+		"tsx": "^4.20.6",
 		"typescript": "^5.5.2",
 		"vitest": "^4.0.9",
 		"wrangler": "^4.48.0"
 	},
 	"dependencies": {
+		"@hono/zod-openapi": "^1.1.4",
+		"@hono/zod-validator": "^0.7.4",
 		"@langchain/anthropic": "^1.0.0",
 		"hono": "^4.10.5"
 	}
