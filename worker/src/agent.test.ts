@@ -97,7 +97,7 @@ describe('agent graph', () => {
     await expect(graph.invoke(initialState)).rejects.toThrow();
   });
 
-  it('should preserve change history in state', async () => {
+  it('should preserve change history and add new entry in finalize', async () => {
     const graph = buildGraph({ validator: new MockValidator() });
     const changeHistory = [
       {
@@ -119,22 +119,28 @@ describe('agent graph', () => {
 
     const result = await graph.invoke(initialState);
 
-    expect(result.changeHistory).toHaveLength(1);
+    // Should have 2 entries: the original + the new one from finalize
+    expect(result.changeHistory).toHaveLength(2);
     expect(result.changeHistory[0].prompt).toBe('Add new function');
     expect(result.changeHistory[0].changeSummary).toBe('Added calculateSum function');
+    expect(result.changeHistory[1].prompt).toBe('');
+    expect(result.changeHistory[1].changeSummary).toBe('Code updated by the user');
+    expect(result.changeHistory[1].response).toBe('Code updated');
   });
 
-  it('should preserve staging iterations', async () => {
+  it('should clear staging iterations in finalize', async () => {
     const graph = buildGraph({ validator: new MockValidator() });
     const stagingIterations = [
       {
         updatedCode: 'const x = 1;',
-        comment: 'Initial version',
+        message: 'Created initial version',
+        summary: 'Initial version with x=1',
         validationErrors: undefined,
       },
       {
         updatedCode: 'const x = 2;',
-        comment: 'Updated value',
+        message: 'Updated the value',
+        summary: 'Changed x from 1 to 2',
         validationErrors: 'Type mismatch',
       },
     ];
@@ -151,8 +157,10 @@ describe('agent graph', () => {
 
     const result = await graph.invoke(initialState);
 
-    expect(result.stagingIterations).toHaveLength(2);
-    expect(result.stagingIterations[1].validationErrors).toBe('Type mismatch');
+    // Finalize clears staging iterations
+    expect(result.stagingIterations).toHaveLength(0);
+    // But preserves the result
+    expect(result.result).toBeDefined();
   });
 
   it('should validate code and preserve existing validationErrors field if no error', async () => {
@@ -176,7 +184,7 @@ describe('agent graph', () => {
 
   // Tests for conditional routing
   describe('conditional routing', () => {
-    it('should update lastValidCode and exit when validation passes and no prompt', async () => {
+    it('should update lastValidCode in finalize when validation passes and no prompt', async () => {
       const graph = buildGraph({ validator: new MockValidator() });
       const initialState = {
         changeHistory: [],
@@ -192,6 +200,14 @@ describe('agent graph', () => {
 
       expect(result.lastValidCode).toBe('const y = 2;');
       expect(result.userUpdate?.validationErrors).toBeUndefined();
+      expect(result.result).toBeDefined();
+      expect(result.result?.message).toBe('Code updated');
+      expect(result.result?.code).toBe('const y = 2;');
+      // Check that change history was updated
+      expect(result.changeHistory).toHaveLength(1);
+      expect(result.changeHistory[0].changeSummary).toBe('Code updated by the user');
+      // Summary is cleared after being written to change history
+      expect(result.summary).toBeUndefined();
     });
 
     it('should route to generateResponse when validation fails (to let LLM fix it)', async () => {

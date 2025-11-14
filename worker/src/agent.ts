@@ -2,12 +2,17 @@ import { StateGraph, START, END, Annotation } from '@langchain/langgraph';
 import { validateJscadCode } from './jscad-validator';
 import { CloudflareKVSaver } from './kv';
 import type { DbEnv } from './db';
+import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain';
+import { Client } from 'langsmith';
 
 // Environment interface for agent needs
 export interface AgentEnv extends DbEnv {
   CHAT_HISTORY: any;
   JSCAD_VALIDATION_SERVICE_URL?: string;
   ANTHROPIC_API_KEY?: string;
+  LANGCHAIN_TRACING_V2?: string;
+  LANGCHAIN_API_KEY?: string;
+  LANGCHAIN_PROJECT?: string;
 }
 
 interface ChangeHistoryItem {
@@ -22,9 +27,15 @@ interface UserUpdate {
 }
 
 interface StagingIteration {
-  updatedCode: string;
-  comment: string;
+  updatedCode?: string;
+  message: string;
+  summary: string;
   validationErrors?: string;
+}
+
+interface Response {
+  message: string;
+  code?: string;
 }
 
 const StateAnnotation = Annotation.Root({
@@ -47,6 +58,14 @@ const StateAnnotation = Annotation.Root({
   stagingIterations: Annotation<StagingIteration[]>({
     reducer: (current, update) => update ?? current,
     default: () => [],
+  }),
+  summary: Annotation<string | undefined>({
+    reducer: (_current, update) => update,
+    default: () => undefined,
+  }),
+  response: Annotation<Response | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
   }),
 });
 
@@ -99,28 +118,59 @@ function createValidateUserUpdate(validator: CodeValidator) {
     if (state.userUpdate) {
       const validationError = await validator.validate(state.userUpdate.code);
 
-      return {
+      const updatedState = {
         ...state,
         userUpdate: {
           ...state.userUpdate,
           validationErrors: validationError,
         },
       };
+
+      // If going directly to finalize (no prompt, valid code), set result and summary
+      if (!state.userPrompt && !validationError) {
+        return {
+          ...updatedState,
+          summary: 'Code updated by the user',
+          response: {
+            message: 'Code updated',
+            code: state.userUpdate.code,
+          },
+        };
+      }
+
+      return updatedState;
     }
 
     return state;
   };
 }
 
-// Node to update lastValidCode when validation passes
-function updateLastValidCode(state: State): State {
-  if (state.userUpdate && !state.userUpdate.validationErrors) {
-    return {
-      ...state,
-      lastValidCode: state.userUpdate.code,
-    };
+// Node to finalize the state after processing
+function finalize(state: State): State {
+  if (!state.response || !state.summary) {
+    return state;
   }
-  return state;
+
+  // Create new change history entry
+  const newHistoryEntry: ChangeHistoryItem = {
+    prompt: state.userPrompt || '',
+    changeSummary: state.summary,
+    response: state.response.message,
+  };
+
+  // Update lastValidCode if response has code
+  const newLastValidCode = state.response.code || state.lastValidCode;
+
+  // Return state with only response, changeHistory, and lastValidCode (clear summary)
+  return {
+    changeHistory: [...state.changeHistory, newHistoryEntry],
+    lastValidCode: newLastValidCode,
+    userPrompt: undefined,
+    userUpdate: undefined,
+    stagingIterations: [],
+    summary: undefined,
+    response: state.response,
+  };
 }
 
 // Node for generating LLM response (may include code or just text)
@@ -152,7 +202,12 @@ JSCAD is a library for creating 3D geometry using JavaScript. The main concepts:
 - You write a function that returns 3D primitives or operations
 - Common primitives: cube, sphere, cylinder, etc.
 - Operations: union, subtract, intersect, translate, rotate, scale
-- All functions are available from the jscadModeling global object`;
+- All functions are available from the jscadModeling global object
+
+IMPORTANT - Face Ordering: When working with custom geometry or manipulating faces directly, ensure faces are ordered correctly:
+- Faces must be ordered counter-clockwise when viewed from the outside (following the right-hand rule)
+- Correct face ordering is critical for proper normals, rendering, and boolean operations
+- The jscadModeling library handles face ordering automatically for primitives, but be aware of this when creating custom geometries or using advanced operations`;
 
   const lastValidCodeBlock = state.lastValidCode
     ? `Last valid code:
@@ -176,6 +231,17 @@ ${state.userUpdate.validationErrors}`
   const userPromptBlock = `The user provided the following prompt:
 ${userPrompt}`;
 
+  const changeHistoryBlock = (state.changeHistory && state.changeHistory.length > 0)
+    ? `Conversation history (previous successful changes):
+
+${state.changeHistory.map((item, index) => {
+  return `Change ${index + 1}:
+User request: ${item.prompt || '(code update)'}
+What was done: ${item.changeSummary}
+Response: ${item.response}`;
+}).join('\n\n')}`
+    : '';
+
   const previousAttemptsBlock = (state.stagingIterations && state.stagingIterations.length > 0)
     ? `Previous attempts to solve this problem:
 
@@ -185,21 +251,22 @@ ${state.stagingIterations.map((iteration, index) => {
     : `Status: Validation passed`;
 
   return `Attempt ${index + 1}:
-Comment: ${iteration.comment}
+Summary: ${iteration.summary}
 ${status}`;
 }).join('\n\n')}`
     : '';
 
   const responseFormatInstructions = `Please provide:
-1. A brief comment (1-2 sentences) explaining what change you made or what you created
-2. The complete JSCAD code
+1. MESSAGE: A user-friendly message (1-2 sentences) that will be shown to the user
+2. SUMMARY: A technical summary (1-2 sentences) for your own reference in future attempts
+3. CODE: The complete JSCAD code (optional - omit if you're just answering a question)
 
 Format your response exactly like this:
-COMMENT: [Your brief explanation here]
-
+MESSAGE: [User-friendly explanation here]
+SUMMARY: [Technical summary for model's reference]
 CODE:
 \`\`\`javascript
-[Your code here]
+[Your code here - optional]
 \`\`\`
 
 IMPORTANT: The code MUST follow this structure:
@@ -207,9 +274,9 @@ IMPORTANT: The code MUST follow this structure:
 - Define a main() function that returns the geometry
 - The main() function is the entry point and must return the final 3D geometry
 
-Example response:
-COMMENT: Created a simple cube positioned on the build plate.
-
+Example response with code:
+MESSAGE: I've created a simple cube positioned on the build plate, ready for 3D printing.
+SUMMARY: Created 10mm cube using primitives.cube with center positioned at [0,0,5] to sit on XY plane.
 CODE:
 \`\`\`javascript
 const { primitives } = jscadModeling
@@ -219,14 +286,29 @@ function main() {
 }
 \`\`\`
 
+Example response without code (just answering):
+MESSAGE: JSCAD uses the jscadModeling object to access primitives. You can create basic shapes like cube, sphere, and cylinder.
+SUMMARY: Provided explanation of jscadModeling object structure and available primitives.
+
 Make sure the code is valid JSCAD and follows these patterns:
 - Use jscadModeling for accessing primitives and operations
 - Always define a main() function that returns the final geometry
-- Use proper syntax and avoid common errors`;
+- Use proper syntax and avoid common errors
+
+COMMON MISTAKES TO AVOID:
+1. Missing main() function: The code MUST define a main() function - this is required and will cause validation to fail
+2. Wrong return type: main() must return a JSCAD geometry object (with polygons property), NOT a string, number, or array of primitives. Use booleans.union() if you need to combine multiple primitives
+3. Using import/require: NEVER use import or require statements. Always use the jscadModeling global object that's already available
+4. Not destructuring: Always destructure needed modules from jscadModeling at the top level: const { primitives, transforms, booleans } = jscadModeling
+5. Negative sizes: Avoid negative dimensions (e.g., size: -5) as they cause runtime errors. Use positive values and transforms for positioning
+6. Forgetting to return: Always explicitly return the geometry from main() - don't just create it
+7. Non-manifold geometry: Ensure all faces are properly connected to create watertight, solid objects. This is especially important for boolean operations and 3D printing
+8. Incorrect module access: Access modules via jscadModeling (e.g., jscadModeling.primitives.cube), not as separate imports`;
 
   // Assemble the prompt in the correct order, filtering out empty blocks
   const systemPrompt = [
     baseInstructions,
+    changeHistoryBlock,
     lastValidCodeBlock,
     userProvidedCodeBlock,
     userCodeValidationErrorsBlock,
@@ -239,6 +321,9 @@ Make sure the code is valid JSCAD and follows these patterns:
 
   const userMessage = new HumanMessage(userPrompt);
 
+  console.log('LLM System Prompt:', systemPrompt);
+  console.log('LLM User Message:', userPrompt);
+
   const response = await llm.invoke([
     { role: 'system', content: systemPrompt },
     userMessage,
@@ -246,11 +331,13 @@ Make sure the code is valid JSCAD and follows these patterns:
 
   const responseContent = typeof response.content === 'string' ? response.content : '';
 
-  // Extract comment and code from response
-  const commentMatch = responseContent.match(/COMMENT:\s*(.+?)(?=\n|CODE:|$)/s);
+  // Extract message, summary, and code from response
+  const messageMatch = responseContent.match(/MESSAGE:\s*(.+?)(?=\n|SUMMARY:|CODE:|$)/s);
+  const summaryMatch = responseContent.match(/SUMMARY:\s*(.+?)(?=\n|CODE:|$)/s);
   const codeBlockMatch = responseContent.match(/```(?:javascript|js|jscad)?\n([\s\S]*?)\n```/);
 
-  const comment = commentMatch ? commentMatch[1].trim() : 'LLM response';
+  const message = messageMatch ? messageMatch[1].trim() : 'LLM response';
+  const summary = summaryMatch ? summaryMatch[1].trim() : message;
 
   if (codeBlockMatch) {
     const extractedCode = codeBlockMatch[1];
@@ -258,7 +345,8 @@ Make sure the code is valid JSCAD and follows these patterns:
     // Create staging iteration WITHOUT validation (validation happens in separate node)
     const newIteration: StagingIteration = {
       updatedCode: extractedCode,
-      comment,
+      message,
+      summary,
       validationErrors: undefined, // Will be filled in by validation node
     };
 
@@ -271,15 +359,16 @@ Make sure the code is valid JSCAD and follows these patterns:
     };
   }
 
-  // No code block found - create a staging iteration with just the comment
+  // No code block found - just a text response
   return {
     ...state,
     stagingIterations: [
       ...state.stagingIterations,
       {
-        updatedCode: state.lastValidCode || '',
-        comment: `No code generated: ${comment}`,
-        validationErrors: 'No code block found in LLM response',
+        updatedCode: undefined,
+        message,
+        summary,
+        validationErrors: undefined,
       },
     ],
   };
@@ -288,12 +377,22 @@ Make sure the code is valid JSCAD and follows these patterns:
 // Node to validate generated code
 function createValidateGeneratedCode(validator: CodeValidator) {
   return async (state: State): Promise<State> => {
-    // Get the last staging iteration (the one just created by generateCode)
+    // Get the last staging iteration (the one just created by generateResponse)
     const lastIteration = state.stagingIterations[state.stagingIterations.length - 1];
 
-    if (!lastIteration || !lastIteration.updatedCode) {
-      // No code to validate
+    if (!lastIteration) {
       return state;
+    }
+
+    // If there's no code in the last iteration, set result and summary
+    if (!lastIteration.updatedCode) {
+      return {
+        ...state,
+        summary: lastIteration.summary,
+        response: {
+          message: lastIteration.message,
+        },
+      };
     }
 
     // Validate the code
@@ -306,15 +405,33 @@ function createValidateGeneratedCode(validator: CodeValidator) {
       validationErrors: validationError,
     };
 
+    // Count failed iterations to check if we've hit the retry limit
+    const failedIterations = updatedIterations.filter(it => it.validationErrors).length;
+
     if (!validationError) {
-      // Code is valid - update lastValidCode
+      // Code is valid - update lastValidCode and set result and summary
       return {
         ...state,
-        lastValidCode: lastIteration.updatedCode,
+        lastValidCode: lastIteration.updatedCode!,
         stagingIterations: updatedIterations,
+        summary: lastIteration.summary,
+        response: {
+          message: lastIteration.message,
+          code: lastIteration.updatedCode,
+        },
+      };
+    } else if (failedIterations >= 3) {
+      // Failed after 3 attempts - set result and summary with failure message
+      return {
+        ...state,
+        stagingIterations: updatedIterations,
+        summary: 'Failed after 3 attempts',
+        response: {
+          message: "I can't help you with this request. Please try again with more details or a different approach.",
+        },
       };
     } else {
-      // Code has validation errors
+      // Code has validation errors but we can retry
       return {
         ...state,
         stagingIterations: updatedIterations,
@@ -323,28 +440,21 @@ function createValidateGeneratedCode(validator: CodeValidator) {
   };
 }
 
-// Placeholder node for summarization (TBD)
-function summarize(state: State): State {
-  // TODO: Implement summarization logic
-  // This will create a summary of all staging iterations and provide feedback
-  return state;
-}
-
 // Routing function after validating generated code
 function routeAfterGeneratedCodeValidation(state: State): string {
   const lastIteration = state.stagingIterations[state.stagingIterations.length - 1];
 
-  // If validation succeeded, go to summarization
+  // If validation succeeded, go to finalize
   if (lastIteration && !lastIteration.validationErrors) {
-    return 'summarize';
+    return 'finalize';
   }
 
   // Count failed iterations (those with validation errors)
   const failedIterations = state.stagingIterations.filter(it => it.validationErrors).length;
 
-  // If we've exceeded max retries (3), go to summarization
+  // If we've exceeded max retries (3), go to finalize
   if (failedIterations >= 3) {
-    return 'summarize';
+    return 'finalize';
   }
 
   // Otherwise, retry generateResponse
@@ -360,10 +470,10 @@ function createGenerateResponse(validator: CodeValidator, apiKey?: string) {
 
 // Conditional routing after validation
 function routeAfterValidation(state: State): string {
-  // ONLY update lastValidCode if: validation passed AND no prompt
-  // Everything else routes to generateCode so LLM can help
+  // ONLY go to finalize if: validation passed AND no prompt
+  // Everything else routes to generateResponse so LLM can help
   if (!state.userPrompt && state.userUpdate && !state.userUpdate.validationErrors) {
-    return 'updateLastValidCode';
+    return 'finalize';
   }
 
   // All other cases route to generateResponse:
@@ -380,28 +490,50 @@ export function buildGraph(config: {
 }) {
   const graph = new StateGraph(StateAnnotation)
     .addNode('validateUserUpdate', createValidateUserUpdate(config.validator))
-    .addNode('updateLastValidCode', updateLastValidCode)
+    .addNode('finalize', finalize)
     .addNode('generateResponse', createGenerateResponse(config.validator, config.apiKey))
     .addNode('validateGeneratedCode', createValidateGeneratedCode(config.validator))
-    .addNode('summarize', summarize)
     .addEdge(START, 'validateUserUpdate')
     .addConditionalEdges('validateUserUpdate', routeAfterValidation, {
-      updateLastValidCode: 'updateLastValidCode',
+      finalize: 'finalize',
       generateResponse: 'generateResponse',
-      [END]: END,
     })
-    .addEdge('updateLastValidCode', END)
+    .addEdge('finalize', END)
     .addEdge('generateResponse', 'validateGeneratedCode')
     .addConditionalEdges('validateGeneratedCode', routeAfterGeneratedCodeValidation, {
       generateResponse: 'generateResponse',
-      summarize: 'summarize',
-    })
-    .addEdge('summarize', END);
+      finalize: 'finalize',
+    });
 
   // Compile with checkpointer if provided, otherwise compile without persistence
   return config.checkpointer
     ? graph.compile({ checkpointer: config.checkpointer as any })
     : graph.compile();
+}
+
+// Initialize LangSmith tracer if enabled
+export function createLangSmithCallbacks(env: AgentEnv): any[] {
+  const langsmithClient = env.LANGCHAIN_TRACING_V2 === 'true' && env.LANGCHAIN_API_KEY
+    ? new Client({
+      apiKey: env.LANGCHAIN_API_KEY,
+      apiUrl: 'https://eu.api.smith.langchain.com',
+    })
+    : undefined;
+
+  return langsmithClient
+    ? [new LangChainTracer({ projectName: env.LANGCHAIN_PROJECT || 'gen3dchat', client: langsmithClient })]
+    : [];
+}
+
+// Flush LangSmith traces
+export async function flushLangSmithTraces(env: AgentEnv): Promise<void> {
+  if (env.LANGCHAIN_TRACING_V2 === 'true' && env.LANGCHAIN_API_KEY) {
+    const client = new Client({
+      apiKey: env.LANGCHAIN_API_KEY,
+      apiUrl: 'https://eu.api.smith.langchain.com',
+    });
+    await client.awaitPendingTraceBatches?.();
+  }
 }
 
 export type { State, ValidStateInput };

@@ -1,12 +1,15 @@
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import { getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
-import { buildGraph, JscadValidator, type AgentEnv } from './agent';
+import { buildGraph, JscadValidator, type AgentEnv, createLangSmithCallbacks, flushLangSmithTraces } from './agent';
 import { CloudflareKVSaver } from './kv';
 import {
   createThread,
   getNextThreadId,
   getSqidFromUuid,
+  getUuidFromSqid,
+  verifyThreadOwnership,
+  updateThreadTimestamp,
 } from './db';
 
 export interface Env extends AgentEnv {
@@ -60,9 +63,48 @@ export const ErrorResponseSchema = z.object({
   }),
 }).openapi('ErrorResponse');
 
+export const ContinueThreadRequestSchema = z.object({
+  checkpointId: z.string().openapi({
+    description: 'Checkpoint ID to resume from (MANDATORY)',
+    example: 'xyz789',
+  }),
+  message: z.string().optional().openapi({
+    description: 'A text prompt or message for the agent',
+    example: 'Make the cube bigger',
+  }),
+  code: z.string().optional().openapi({
+    description: 'JSCAD code to validate and execute',
+    example: 'function main() {\n  const { primitives } = jscadModeling\n  return primitives.cube({ size: 20 })\n}',
+  }),
+}).refine(
+  (data) => data.message || data.code,
+  { message: 'Either message or code must be provided' }
+).openapi('ContinueThreadRequest');
+
+export const ContinueThreadResponseSchema = z.object({
+  threadId: z.string().openapi({
+    description: 'Thread identifier',
+    example: 'abc123',
+  }),
+  checkpointId: z.string().openapi({
+    description: 'New checkpoint identifier',
+    example: 'xyz999',
+  }),
+  message: z.string().openapi({
+    description: 'Assistant response message',
+    example: 'Code updated successfully',
+  }),
+  code: z.string().optional().openapi({
+    description: 'Updated JSCAD code (if available)',
+    example: 'function main() {\n  return primitives.cube({ size: 20 })\n}',
+  }),
+}).openapi('ContinueThreadResponse');
+
 // Export types derived from schemas
 export type CreateThreadRequest = z.infer<typeof CreateThreadRequestSchema>;
 export type CreateThreadResponse = z.infer<typeof CreateThreadResponseSchema>;
+export type ContinueThreadRequest = z.infer<typeof ContinueThreadRequestSchema>;
+export type ContinueThreadResponse = z.infer<typeof ContinueThreadResponseSchema>;
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 
 // Helper functions for session management
@@ -152,8 +194,12 @@ app.openapi(createThreadRoute, async (c) => {
     const currentThreadId = await getNextThreadId(c.env.DB, c.env);
     await createThread(c.env.DB, currentThreadId, sessionId);
 
+    // Initialize LangSmith callbacks
+    const callbacks = createLangSmithCallbacks(c.env);
+
     const config: any = {
       configurable: { thread_id: currentThreadId },
+      callbacks,
     };
 
     // Build initial state based on what was provided
@@ -171,22 +217,13 @@ app.openapi(createThreadRoute, async (c) => {
       const currentCheckpointUuid = tuple?.checkpoint?.id || crypto.randomUUID();
       const currentCheckpointSqid = await getSqidFromUuid(c.env.DB, currentCheckpointUuid) || currentCheckpointUuid;
 
-      // Build response based on what happened
-      let responseMessage = '';
-      if (result.userUpdate?.validationErrors) {
-        responseMessage = `Validation error: ${result.userUpdate.validationErrors}`;
-      } else if (result.lastValidCode) {
-        responseMessage = code
-          ? 'Code updated successfully'
-          : 'Code generated successfully';
-      } else {
-        responseMessage = 'Request processed';
-      }
+      // Flush LangSmith traces
+      await flushLangSmithTraces(c.env);
 
       return c.json({
         threadId: currentThreadId,
         checkpointId: currentCheckpointSqid,
-        message: responseMessage,
+        message: result.response?.message || 'Request processed',
         code: result.lastValidCode || undefined,
       }, 200);
     } catch (error: any) {
@@ -208,6 +245,157 @@ app.openapi(createThreadRoute, async (c) => {
     }
   },
 );
+
+// Define the route schema for continuing a thread
+const continueThreadRoute = createRoute({
+  method: 'post',
+  path: '/_/threads/{threadId}',
+  request: {
+    params: z.object({
+      threadId: z.string().openapi({
+        description: 'Thread ID',
+        example: 'abc123',
+      }),
+    }),
+    body: {
+      content: {
+        'application/json': {
+          schema: ContinueThreadRequestSchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: ContinueThreadResponseSchema,
+        },
+      },
+      description: 'Thread continued successfully',
+    },
+    403: {
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+      description: 'Unauthorized - thread ownership verification failed',
+    },
+    404: {
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+      description: 'Thread or checkpoint not found',
+    },
+    500: {
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+      description: 'Server error',
+    },
+  },
+  tags: ['Threads'],
+  summary: 'Continue an existing thread',
+  description: 'Continues an existing thread from a specific checkpoint. Requires checkpointId and either message or code.',
+});
+
+app.openapi(continueThreadRoute, async (c) => {
+  const threadId = c.req.param('threadId');
+  const { checkpointId, message, code } = c.req.valid('json');
+
+  // Get session and verify ownership
+  const sessionId = await getOrCreateSession(c);
+  const isOwner = await verifyThreadOwnership(c.env.DB, threadId, sessionId);
+
+  if (!isOwner) {
+    return c.json({
+      error: 'Unauthorized: You do not own this thread',
+    }, 403);
+  }
+
+  // Update thread timestamp
+  await updateThreadTimestamp(c.env.DB, threadId);
+
+  // Try to resolve Sqid to UUID, if it fails assume it's already a UUID
+  const checkpointUuid = await getUuidFromSqid(c.env.DB, checkpointId) || checkpointId;
+
+  // Set up checkpoint saver with KV
+  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY, c.env.DB, c.env);
+
+  // Verify the checkpoint exists
+  const existingCheckpoint = await checkpointer.getCheckpointById(threadId, checkpointUuid);
+  if (!existingCheckpoint) {
+    return c.json({
+      error: 'Checkpoint not found',
+      details: `No checkpoint found with ID ${checkpointId} for thread ${threadId}`,
+    }, 404);
+  }
+
+  // Create the validator
+  const validator = new JscadValidator(c.env.JSCAD_VALIDATION_SERVICE_URL);
+
+  // Create the agent graph with persistence
+  const graph = buildGraph({
+    validator,
+    checkpointer,
+    apiKey: c.env.ANTHROPIC_API_KEY,
+  });
+
+  // Initialize LangSmith callbacks
+  const callbacks = createLangSmithCallbacks(c.env);
+
+  const config: any = {
+    configurable: { thread_id: threadId },
+    callbacks,
+  };
+
+  // Build initial state based on what was provided
+  let initialState: any = {
+    userPrompt: message || undefined,
+    userUpdate: code ? { code } : undefined,
+  };
+
+  try {
+    // Invoke the graph to continue from the checkpoint
+    const result = await graph.invoke(initialState, config);
+
+    // Get the new checkpoint ID from the saved checkpoint
+    const tuple = await checkpointer.getTuple({ configurable: { thread_id: threadId } });
+    const newCheckpointUuid = tuple?.checkpoint?.id || crypto.randomUUID();
+    const newCheckpointSqid = await getSqidFromUuid(c.env.DB, newCheckpointUuid) || newCheckpointUuid;
+
+    // Flush LangSmith traces
+    await flushLangSmithTraces(c.env);
+
+    return c.json({
+      threadId,
+      checkpointId: newCheckpointSqid,
+      message: result.response?.message || 'Request processed',
+      code: result.lastValidCode || undefined,
+    }, 200);
+  } catch (error: any) {
+    console.error('Error processing request:', error);
+
+    // Check for missing API key
+    if (error.message?.includes('API key') || !c.env.ANTHROPIC_API_KEY) {
+      return c.json({
+        error: 'AI-powered code generation requires an API key to be configured.',
+        threadId,
+      }, 500);
+    }
+
+    return c.json({
+      error: 'Failed to process request',
+      details: error.message,
+      threadId,
+    }, 500);
+  }
+});
 
 // OpenAPI documentation endpoint (JSON)
 app.doc('/doc', {
