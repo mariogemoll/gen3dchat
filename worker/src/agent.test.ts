@@ -160,7 +160,7 @@ describe('agent graph', () => {
     // Finalize clears staging iterations
     expect(result.stagingIterations).toHaveLength(0);
     // But preserves the result
-    expect(result.result).toBeDefined();
+    expect(result.response).toBeDefined();
   });
 
   it('should validate code and preserve existing validationErrors field if no error', async () => {
@@ -200,9 +200,9 @@ describe('agent graph', () => {
 
       expect(result.lastValidCode).toBe('const y = 2;');
       expect(result.userUpdate?.validationErrors).toBeUndefined();
-      expect(result.result).toBeDefined();
-      expect(result.result?.message).toBe('Code updated');
-      expect(result.result?.code).toBe('const y = 2;');
+      expect(result.response).toBeDefined();
+      expect(result.response?.message).toBe('Code updated');
+      expect(result.response?.code).toBe('const y = 2;');
       // Check that change history was updated
       expect(result.changeHistory).toHaveLength(1);
       expect(result.changeHistory[0].changeSummary).toBe('Code updated by the user');

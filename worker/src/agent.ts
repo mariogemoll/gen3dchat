@@ -9,13 +9,13 @@ import { Client } from 'langsmith';
 export interface AgentEnv extends DbEnv {
   CHAT_HISTORY: any;
   JSCAD_VALIDATION_SERVICE_URL?: string;
-  ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_API_KEY: string;
   LANGCHAIN_TRACING_V2?: string;
   LANGCHAIN_API_KEY?: string;
   LANGCHAIN_PROJECT?: string;
 }
 
-interface ChangeHistoryItem {
+export interface ChangeHistoryItem {
   prompt: string;
   changeSummary: string;
   response: string;

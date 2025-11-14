@@ -66,9 +66,33 @@ export default {
 
     if (isRoot || isThreadRoute) {
       console.log('Serving index.html for SPA route:', path)
-      const indexUrl = new URL('/index.html', url.origin)
-      const indexReq = new Request(indexUrl.toString(), request)
-      return env.ASSETS.fetch(indexReq)
+      // Create a new request for index.html
+      const indexUrl = new URL(request.url)
+      indexUrl.pathname = '/index.html'
+      const indexReq = new Request(indexUrl.toString(), {
+        method: request.method,
+        headers: request.headers,
+      })
+      const response = await env.ASSETS.fetch(indexReq)
+      
+      // If ASSETS returns a redirect, follow it and return the final content
+      if (response.status >= 300 && response.status < 400 && response.headers.get('Location')) {
+        const redirectUrl = new URL(response.headers.get('Location')!, indexUrl)
+        const redirectReq = new Request(redirectUrl.toString(), {
+          method: request.method,
+          headers: request.headers,
+        })
+        const finalResponse = await env.ASSETS.fetch(redirectReq)
+        // Return the final response without redirecting (preserve original URL)
+        return new Response(finalResponse.body, {
+          status: finalResponse.status,
+          statusText: finalResponse.statusText,
+          headers: finalResponse.headers,
+        })
+      }
+      
+      // Return the response directly (no redirect)
+      return response
     }
 
     // 3) Everything else → static assets

@@ -1,7 +1,8 @@
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import { getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
-import { buildGraph, JscadValidator, type AgentEnv, createLangSmithCallbacks, flushLangSmithTraces } from './agent';
+import type { CheckpointTuple } from '@langchain/langgraph-checkpoint';
+import { buildGraph, JscadValidator, type AgentEnv, type ChangeHistoryItem, createLangSmithCallbacks, flushLangSmithTraces } from './agent';
 import { CloudflareKVSaver } from './kv';
 import {
   createThread,
@@ -13,8 +14,8 @@ import {
 } from './db';
 
 export interface Env extends AgentEnv {
-  DAILY_LLM_CALL_LIMIT?: string;
-  ANTHROPIC_API_KEY?: string;
+  DAILY_LLM_CALL_LIMIT: string;
+  ANTHROPIC_API_KEY: string;
 }
 
 // Zod schemas for request/response validation
@@ -100,11 +101,23 @@ export const ContinueThreadResponseSchema = z.object({
   }),
 }).openapi('ContinueThreadResponse');
 
+export const GetCheckpointResponseSchema = z.object({
+  code: z.string().optional().openapi({
+    description: 'Last valid JSCAD code',
+    example: 'function main() {\n  return primitives.cube({ size: 10 })\n}',
+  }),
+  messages: z.array(z.any()).optional().openapi({
+    description: 'Chat history messages (prompts and AI responses). Only included for thread owners.',
+    example: [],
+  }),
+}).openapi('GetCheckpointResponse');
+
 // Export types derived from schemas
 export type CreateThreadRequest = z.infer<typeof CreateThreadRequestSchema>;
 export type CreateThreadResponse = z.infer<typeof CreateThreadResponseSchema>;
 export type ContinueThreadRequest = z.infer<typeof ContinueThreadRequestSchema>;
 export type ContinueThreadResponse = z.infer<typeof ContinueThreadResponseSchema>;
+export type GetCheckpointResponse = z.infer<typeof GetCheckpointResponseSchema>;
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 
 // Helper functions for session management
@@ -395,6 +408,127 @@ app.openapi(continueThreadRoute, async (c) => {
       threadId,
     }, 500);
   }
+});
+
+// Define the route schema for getting a checkpoint
+const getCheckpointRoute = createRoute({
+  method: 'get',
+  path: '/_/threads/{threadId}/{checkpointId}',
+  request: {
+    params: z.object({
+      threadId: z.string().openapi({
+        description: 'Thread ID',
+        example: 'abc123',
+      }),
+      checkpointId: z.string().openapi({
+        description: 'Checkpoint ID (Sqid or UUID)',
+        example: 'xyz789',
+      }),
+    }),
+  },
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: GetCheckpointResponseSchema,
+        },
+      },
+      description: 'Checkpoint retrieved successfully',
+      headers: z.object({
+        'X-Thread-Owner': z.string().openapi({
+          description: 'Whether the requester owns the thread (true/false)',
+          example: 'true',
+        }),
+      }),
+    },
+    404: {
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+      description: 'Checkpoint not found',
+    },
+  },
+  tags: ['Threads'],
+  summary: 'Get a checkpoint by ID',
+  description: 'Retrieves a specific checkpoint from a thread by its ID. The checkpointId can be either a Sqid or UUID.',
+});
+
+app.openapi(getCheckpointRoute, async (c) => {
+  const threadId = c.req.param('threadId');
+  const checkpointSqid = c.req.param('checkpointId');
+
+  // Try to resolve Sqid to UUID, if it fails assume it's already a UUID
+  const checkpointUuid = await getUuidFromSqid(c.env.DB, checkpointSqid) || checkpointSqid;
+
+  // Get session and check ownership
+  const sessionId = await getOrCreateSession(c);
+  const isOwner = await verifyThreadOwnership(c.env.DB, threadId, sessionId);
+
+  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY, c.env.DB, c.env);
+  const tuple: CheckpointTuple | undefined = await checkpointer.getCheckpointById(threadId, checkpointUuid);
+
+  if (!tuple) {
+    return c.json({
+      error: 'Checkpoint not found',
+      details: `No checkpoint found with ID ${checkpointSqid} for thread ${threadId}`,
+    }, 404);
+  }
+
+  // Debug: Print the whole checkpoint
+  console.log('[DEBUG] Full checkpoint tuple:', JSON.stringify(tuple, null, 2));
+  console.log('[DEBUG] Checkpoint channel_values:', JSON.stringify(tuple.checkpoint?.channel_values, null, 2));
+
+  // Add ownership header
+  c.header('X-Thread-Owner', isOwner ? 'true' : 'false');
+
+  // Extract code from checkpoint using proper types
+  const channelValues = tuple.checkpoint?.channel_values as {
+    lastValidCode?: string;
+    changeHistory?: ChangeHistoryItem[];
+  } | undefined;
+  
+  const code = channelValues?.lastValidCode;
+  
+  // Only extract messages if user is the owner
+  const messages: Array<{ role: string; content: string }> = [];
+  
+  if (isOwner) {
+    const changeHistory = channelValues?.changeHistory || [];
+    
+    for (const item of changeHistory) {
+      // Add user message (prompt or code update indicator)
+      if (item.prompt && item.prompt.trim() !== '') {
+        messages.push({
+          role: 'user',
+          content: item.prompt,
+        });
+      } else {
+        // Empty prompt means user code update
+        messages.push({
+          role: 'user',
+          content: '[Code updated]',
+        });
+      }
+      
+      // Add assistant response
+      if (item.response && item.response.trim() !== '') {
+        messages.push({
+          role: 'assistant',
+          content: item.response,
+        });
+      }
+    }
+
+    console.log('[DEBUG] Constructed messages from changeHistory:', JSON.stringify(messages, null, 2));
+  }
+
+  // Return code for everyone, but messages only for owners
+  return c.json({
+    code: code || undefined,
+    ...(isOwner && { messages: messages }),
+  }, 200);
 });
 
 // OpenAPI documentation endpoint (JSON)
