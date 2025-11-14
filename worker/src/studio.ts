@@ -2,7 +2,10 @@
 import { buildGraph, JscadValidator } from './agent';
 
 // Create validator instance
-const validator = new JscadValidator(process.env.VALIDATION_SERVICE_URL);
+const validator = new JscadValidator(process.env.JSCAD_VALIDATION_SERVICE_URL);
 
 // Export the compiled graph for Studio
-export const graph = buildGraph({ validator });
+export const graph = buildGraph({
+  validator,
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});

@@ -11,6 +11,7 @@ import {
 
 export interface Env extends AgentEnv {
   DAILY_LLM_CALL_LIMIT?: string;
+  ANTHROPIC_API_KEY?: string;
 }
 
 // Zod schemas for request/response validation
@@ -141,7 +142,11 @@ app.openapi(createThreadRoute, async (c) => {
     const validator = new JscadValidator(c.env.JSCAD_VALIDATION_SERVICE_URL);
 
     // Create the agent graph with persistence
-    const graph = buildGraph({ validator, checkpointer });
+    const graph = buildGraph({
+      validator,
+      checkpointer,
+      apiKey: c.env.ANTHROPIC_API_KEY,
+    });
 
     // Always create a new thread
     const currentThreadId = await getNextThreadId(c.env.DB, c.env);
@@ -187,12 +192,12 @@ app.openapi(createThreadRoute, async (c) => {
     } catch (error: any) {
       console.error('Error processing request:', error);
 
-      // If it's the "proposeChange not yet implemented" error, return a helpful message
-      if (error.message?.includes('proposeChange not yet implemented')) {
+      // Check for missing API key
+      if (error.message?.includes('API key') || !c.env.ANTHROPIC_API_KEY) {
         return c.json({
-          error: 'AI-powered code generation is not yet implemented. Please provide code directly.',
+          error: 'AI-powered code generation requires an API key to be configured.',
           threadId: currentThreadId,
-        }, 501); // 501 Not Implemented
+        }, 500);
       }
 
       return c.json({
