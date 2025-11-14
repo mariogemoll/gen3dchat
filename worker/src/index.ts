@@ -11,6 +11,8 @@ function validateEnv(env: Env): void {
   const required = [
     'SQIDS_THREAD_ALPHABET',
     'SQIDS_CHECKPOINT_ALPHABET',
+    'ANTHROPIC_API_KEY',
+    'DAILY_LLM_CALL_LIMIT',
   ];
 
   const missing: string[] = [];
@@ -35,6 +37,12 @@ function validateEnv(env: Env): void {
 
   if (env.SQIDS_CHECKPOINT_ALPHABET.length < 3) {
     throw new Error('SQIDS_CHECKPOINT_ALPHABET must be at least 3 characters long');
+  }
+
+  // Validate DAILY_LLM_CALL_LIMIT is a valid number
+  const dailyLimit = parseInt(env.DAILY_LLM_CALL_LIMIT, 10);
+  if (isNaN(dailyLimit) || dailyLimit < 1) {
+    throw new Error('DAILY_LLM_CALL_LIMIT must be a positive integer');
   }
 }
 
