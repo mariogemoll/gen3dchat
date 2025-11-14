@@ -13,6 +13,7 @@ function validateEnv(env: Env): void {
     'SQIDS_CHECKPOINT_ALPHABET',
     'ANTHROPIC_API_KEY',
     'DAILY_LLM_CALL_LIMIT',
+    'JSCAD_VALIDATION_SERVICE_URL',
   ];
 
   const missing: string[] = [];
@@ -24,10 +25,7 @@ function validateEnv(env: Env): void {
   }
 
   if (missing.length > 0) {
-    throw new Error(
-      `Missing required environment variables: ${missing.join(', ')}. ` +
-      `Please set them in Cloudflare Dashboard: Workers & Pages > Settings > Environment variables`
-    );
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}.`);
   }
 
   // Validate Sqids alphabets have enough characters

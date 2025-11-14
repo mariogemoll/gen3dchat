@@ -12,10 +12,12 @@ import {
   verifyThreadOwnership,
   updateThreadTimestamp,
 } from './db';
+import { checkDailyLimit } from './usage-tracker';
 
 export interface Env extends AgentEnv {
   DAILY_LLM_CALL_LIMIT: string;
   ANTHROPIC_API_KEY: string;
+  JSCAD_VALIDATION_SERVICE_URL: string;
 }
 
 // Zod schemas for request/response validation
@@ -162,6 +164,14 @@ const createThreadRoute = createRoute({
       },
       description: 'Thread created successfully',
     },
+    429: {
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+      description: 'Daily limit exceeded',
+    },
     500: {
       content: {
         'application/json': {
@@ -187,6 +197,17 @@ const createThreadRoute = createRoute({
 app.openapi(createThreadRoute, async (c) => {
     const { message, code } = c.req.valid('json');
 
+    // Check daily limit before processing
+    const dailyLimit = parseInt(c.env.DAILY_LLM_CALL_LIMIT, 10);
+    const limitCheck = await checkDailyLimit(c.env.DB, dailyLimit);
+
+    if (limitCheck.exceeded) {
+      return c.json({
+        error: 'Daily limit exceeded',
+        details: limitCheck.reason,
+      }, 429);
+    }
+
     // Get or create session
     const sessionId = await getOrCreateSession(c);
 
@@ -201,6 +222,7 @@ app.openapi(createThreadRoute, async (c) => {
       validator,
       checkpointer,
       apiKey: c.env.ANTHROPIC_API_KEY,
+      db: c.env.DB,
     });
 
     // Always create a new thread
@@ -303,6 +325,14 @@ const continueThreadRoute = createRoute({
       },
       description: 'Thread or checkpoint not found',
     },
+    429: {
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
+        },
+      },
+      description: 'Daily limit exceeded',
+    },
     500: {
       content: {
         'application/json': {
@@ -320,6 +350,17 @@ const continueThreadRoute = createRoute({
 app.openapi(continueThreadRoute, async (c) => {
   const threadId = c.req.param('threadId');
   const { checkpointId, message, code } = c.req.valid('json');
+
+  // Check daily limit before processing
+  const dailyLimit = parseInt(c.env.DAILY_LLM_CALL_LIMIT, 10);
+  const limitCheck = await checkDailyLimit(c.env.DB, dailyLimit);
+
+  if (limitCheck.exceeded) {
+    return c.json({
+      error: 'Daily limit exceeded',
+      details: limitCheck.reason,
+    }, 429);
+  }
 
   // Get session and verify ownership
   const sessionId = await getOrCreateSession(c);
@@ -357,6 +398,7 @@ app.openapi(continueThreadRoute, async (c) => {
     validator,
     checkpointer,
     apiKey: c.env.ANTHROPIC_API_KEY,
+    db: c.env.DB,
   });
 
   // Initialize LangSmith callbacks

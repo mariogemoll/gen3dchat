@@ -4,6 +4,7 @@ import { CloudflareKVSaver } from './kv';
 import type { DbEnv } from './db';
 import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain';
 import { Client } from 'langsmith';
+import { incrementUsage } from './usage-tracker';
 
 // Environment interface for agent needs
 export interface AgentEnv extends DbEnv {
@@ -174,7 +175,7 @@ function finalize(state: State): State {
 }
 
 // Node for generating LLM response (may include code or just text)
-async function generateResponse(state: State, config: { validator: CodeValidator; apiKey?: string }): Promise<State> {
+async function generateResponse(state: State, config: { validator: CodeValidator; apiKey?: string; db?: any }): Promise<State> {
   // Import at runtime to avoid issues
   const { ChatAnthropic } = await import('@langchain/anthropic');
   const { HumanMessage } = await import('@langchain/core/messages');
@@ -329,6 +330,19 @@ COMMON MISTAKES TO AVOID:
     userMessage,
   ]);
 
+  // Log full response object to see what metadata is available
+  console.log('LLM Full Response:', JSON.stringify(response, null, 2));
+
+  // Increment usage counter after successful LLM call
+  if (config.db) {
+    try {
+      await incrementUsage(config.db);
+    } catch (error) {
+      console.error('Failed to increment usage counter:', error);
+      // Don't fail the request if usage tracking fails
+    }
+  }
+
   const responseContent = typeof response.content === 'string' ? response.content : '';
 
   // Extract message, summary, and code from response
@@ -462,9 +476,9 @@ function routeAfterGeneratedCodeValidation(state: State): string {
 }
 
 // Factory function to create generateResponse with injectable validator
-function createGenerateResponse(validator: CodeValidator, apiKey?: string) {
+function createGenerateResponse(validator: CodeValidator, apiKey?: string, db?: any) {
   return async (state: State): Promise<State> => {
-    return generateResponse(state, { validator, apiKey });
+    return generateResponse(state, { validator, apiKey, db });
   };
 }
 
@@ -487,11 +501,12 @@ export function buildGraph(config: {
   validator: CodeValidator;
   checkpointer?: CloudflareKVSaver;
   apiKey?: string;
+  db?: any;
 }) {
   const graph = new StateGraph(StateAnnotation)
     .addNode('validateUserUpdate', createValidateUserUpdate(config.validator))
     .addNode('finalize', finalize)
-    .addNode('generateResponse', createGenerateResponse(config.validator, config.apiKey))
+    .addNode('generateResponse', createGenerateResponse(config.validator, config.apiKey, config.db))
     .addNode('validateGeneratedCode', createValidateGeneratedCode(config.validator))
     .addEdge(START, 'validateUserUpdate')
     .addConditionalEdges('validateUserUpdate', routeAfterValidation, {

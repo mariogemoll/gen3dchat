@@ -15,7 +15,8 @@
 		"enabled": true
 	},
 	"vars": {
-		"DAILY_LLM_CALL_LIMIT": "3"
+		"DAILY_LLM_CALL_LIMIT": "3",
+		"JSCAD_VALIDATION_SERVICE_URL": "jscad_validation_service_url"
 	},
 	"kv_namespaces": [
 		{
