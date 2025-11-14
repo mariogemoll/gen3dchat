@@ -191,7 +191,7 @@ app.openapi(createThreadRoute, async (c) => {
     const sessionId = await getOrCreateSession(c);
 
     // Set up checkpoint saver with KV
-    const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY, c.env.DB, c.env);
+    const checkpointer = new CloudflareKVSaver(c.env.HISTORY, c.env.DB, c.env);
 
     // Create the validator
     const validator = new JscadValidator(c.env.JSCAD_VALIDATION_SERVICE_URL);
@@ -338,7 +338,7 @@ app.openapi(continueThreadRoute, async (c) => {
   const checkpointUuid = await getUuidFromSqid(c.env.DB, checkpointId) || checkpointId;
 
   // Set up checkpoint saver with KV
-  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY, c.env.DB, c.env);
+  const checkpointer = new CloudflareKVSaver(c.env.HISTORY, c.env.DB, c.env);
 
   // Verify the checkpoint exists
   const existingCheckpoint = await checkpointer.getCheckpointById(threadId, checkpointUuid);
@@ -466,7 +466,7 @@ app.openapi(getCheckpointRoute, async (c) => {
   const sessionId = await getOrCreateSession(c);
   const isOwner = await verifyThreadOwnership(c.env.DB, threadId, sessionId);
 
-  const checkpointer = new CloudflareKVSaver(c.env.CHAT_HISTORY, c.env.DB, c.env);
+  const checkpointer = new CloudflareKVSaver(c.env.HISTORY, c.env.DB, c.env);
   const tuple: CheckpointTuple | undefined = await checkpointer.getCheckpointById(threadId, checkpointUuid);
 
   if (!tuple) {

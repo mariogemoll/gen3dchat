@@ -16,7 +16,7 @@
 	},
 	"kv_namespaces": [
 		{
-			"binding": "CHAT_HISTORY",
+			"binding": "HISTORY",
 			"id": "KV_NAMESPACE_ID"
 		}
 	],

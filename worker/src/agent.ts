@@ -7,7 +7,7 @@ import { Client } from 'langsmith';
 
 // Environment interface for agent needs
 export interface AgentEnv extends DbEnv {
-  CHAT_HISTORY: any;
+  HISTORY: any;
   JSCAD_VALIDATION_SERVICE_URL?: string;
   ANTHROPIC_API_KEY: string;
   LANGCHAIN_TRACING_V2?: string;

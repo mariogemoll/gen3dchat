@@ -3,7 +3,7 @@ import app from './api';
 
 // Mock environment
 const createMockEnv = (): any => ({
-  CHAT_HISTORY: {
+  HISTORY: {
     get: vi.fn(),
     put: vi.fn(),
     delete: vi.fn(),
