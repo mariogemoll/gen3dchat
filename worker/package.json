@@ -13,12 +13,15 @@
 		"tsx": "^4.20.6",
 		"typescript": "^5.5.2",
 		"vitest": "^4.0.9",
-		"wrangler": "^4.48.0"
+		"wrangler": "^4.47.0"
 	},
 	"dependencies": {
 		"@hono/zod-openapi": "^1.1.4",
 		"@hono/zod-validator": "^0.7.4",
 		"@langchain/anthropic": "^1.0.0",
-		"hono": "^4.10.5"
+		"@langchain/core": "^1.0.5",
+		"@langchain/langgraph": "^1.0.2",
+		"hono": "^4.10.5",
+		"sqids": "^0.3.0"
 	}
 }
