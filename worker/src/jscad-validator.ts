@@ -39,7 +39,7 @@ export async function validateJscadCode(code: string, validationServiceUrl?: str
     })
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+      const error: any = await response.json().catch(() => ({ error: 'Unknown error' }))
       return {
         ok: false,
         phase: 'execute',
@@ -47,7 +47,7 @@ export async function validateJscadCode(code: string, validationServiceUrl?: str
       }
     }
 
-    const result = await response.json()
+    const result: ValidationResult = await response.json()
     return result
   } catch (e: any) {
     return {
