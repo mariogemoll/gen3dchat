@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "gen3dchat",
+	"name": "",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-11-11",
 	"compatibility_flags": [
@@ -15,20 +15,22 @@
 		"enabled": true
 	},
 	"vars": {
+		"ANTHROPIC_API_KEY": "{{.ANTHROPIC_API_KEY}}",
 		"DAILY_LLM_CALL_LIMIT": "3",
-		"JSCAD_VALIDATION_SERVICE_URL": "jscad_validation_service_url"
+		"JSCAD_VALIDATION_SERVICE_URL": "https://validation.gen3d.chat/api/validate",
+		"SQIDS_CHECKPOINT_ALPHABET": "{{.SQIDS_CHECKPOINT_ALPHABET}}",
+		"SQIDS_THREAD_ALPHABET": "{{.SQIDS_THREAD_ALPHABET}}"
 	},
 	"kv_namespaces": [
 		{
 			"binding": "HISTORY",
-			"id": "KV_NAMESPACE_ID"
+			"id": "{{.KV_NAMESPACE_ID}}"
 		}
 	],
 	"d1_databases": [
 		{
 			"binding": "DB",
-			"database_name": "DATABASE_NAME",
-			"database_id": "DATABASE_ID"
+			"database_id": "{{.D1_DATABASE_ID}}"
 		}
 	]
 }
