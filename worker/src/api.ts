@@ -16,7 +16,7 @@ import { checkDailyLimit } from './usage-tracker';
 
 export interface Env extends AgentEnv {
   DAILY_LLM_CALL_LIMIT: string;
-  ANTHROPIC_API_KEY: string;
+  ZAI_API_KEY: string;
   JSCAD_VALIDATION_SERVICE_URL: string;
 }
 
@@ -221,7 +221,7 @@ app.openapi(createThreadRoute, async (c) => {
     const graph = buildGraph({
       validator,
       checkpointer,
-      apiKey: c.env.ANTHROPIC_API_KEY,
+      apiKey: c.env.ZAI_API_KEY,
       db: c.env.DB,
     });
 
@@ -265,7 +265,7 @@ app.openapi(createThreadRoute, async (c) => {
       console.error('Error processing request:', error);
 
       // Check for missing API key
-      if (error.message?.includes('API key') || !c.env.ANTHROPIC_API_KEY) {
+      if (error.message?.includes('API key') || !c.env.ZAI_API_KEY) {
         return c.json({
           error: 'AI-powered code generation requires an API key to be configured.',
           threadId: currentThreadId,
@@ -397,7 +397,7 @@ app.openapi(continueThreadRoute, async (c) => {
   const graph = buildGraph({
     validator,
     checkpointer,
-    apiKey: c.env.ANTHROPIC_API_KEY,
+    apiKey: c.env.ZAI_API_KEY,
     db: c.env.DB,
   });
 
@@ -437,7 +437,7 @@ app.openapi(continueThreadRoute, async (c) => {
     console.error('Error processing request:', error);
 
     // Check for missing API key
-    if (error.message?.includes('API key') || !c.env.ANTHROPIC_API_KEY) {
+    if (error.message?.includes('API key') || !c.env.ZAI_API_KEY) {
       return c.json({
         error: 'AI-powered code generation requires an API key to be configured.',
         threadId,

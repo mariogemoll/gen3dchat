@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import app from './api';
 
+vi.mock('@langchain/openai', () => ({
+  ChatOpenAI: vi.fn().mockImplementation(function () { return {
+    invoke: vi.fn().mockRejectedValue(new Error('Mock LLM failure')),
+  }; }),
+}));
+
 // Mock environment
 const createMockEnv = (): any => ({
   HISTORY: {
@@ -19,7 +25,7 @@ const createMockEnv = (): any => ({
   SQIDS_THREAD_ALPHABET: 'abcdefghijklmnopqrstuvwxyz',
   SQIDS_CHECKPOINT_ALPHABET: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
   JSCAD_VALIDATION_SERVICE_URL: 'http://localhost:3000/validate',
-  ANTHROPIC_API_KEY: 'test-key-12345',
+  ZAI_API_KEY: 'test-key-12345',
 });
 
 describe('API endpoints', () => {
@@ -71,9 +77,7 @@ describe('API endpoints', () => {
     const res = await app.fetch(req, mockEnv);
     const json = await res.json() as any;
 
-    // Since validation will likely fail in test env (no real validation service),
-    // it routes to generateCode which will fail with auth error (fake API key)
-    // In production with real services, valid code would succeed
+    // Validation can fail without the service, and the model mock rejects any routed request.
     expect(json.threadId).toBeDefined();
   });
 });

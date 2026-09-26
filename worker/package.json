@@ -18,9 +18,9 @@
 	"dependencies": {
 		"@hono/zod-openapi": "^1.1.4",
 		"@hono/zod-validator": "^0.7.4",
-		"@langchain/anthropic": "^1.0.0",
 		"@langchain/core": "^1.0.5",
 		"@langchain/langgraph": "^1.0.2",
+		"@langchain/openai": "^1.5.13",
 		"hono": "^4.10.5",
 		"sqids": "^0.3.0"
 	}

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildGraph, type CodeValidator } from './agent';
+import { ChatOpenAI } from '@langchain/openai';
+
+const mockInvoke = vi.hoisted(() => vi.fn().mockRejectedValue(new Error('Mock LLM failure')));
+vi.mock('@langchain/openai', () => ({
+  ChatOpenAI: vi.fn().mockImplementation(function () { return { invoke: mockInvoke }; }),
+}));
 
 // Mock validator for testing
 class MockValidator implements CodeValidator {
@@ -55,9 +61,14 @@ describe('agent graph', () => {
       stagingIterations: [],
     };
 
-    // This will fail with network error since we don't have a real API key
-    // but we're testing that it attempts to call the LLM rather than throwing "not implemented"
-    await expect(graph.invoke(initialState)).rejects.toThrow();
+    // The mock confirms that the graph reaches the configured model client.
+    await expect(graph.invoke(initialState)).rejects.toThrow('Mock LLM failure');
+    expect(ChatOpenAI).toHaveBeenCalledWith({
+      model: 'glm-5.3',
+      apiKey: 'test-key',
+      configuration: { baseURL: 'https://api.z.ai/api/paas/v4/' },
+    });
+    expect(mockInvoke).toHaveBeenCalled();
   });
 
   it('should validate user update with valid code', async () => {
@@ -93,7 +104,7 @@ describe('agent graph', () => {
       stagingIterations: [],
     };
 
-    // This will now route to generateResponse to fix the error, which will fail with network error
+    // The model mock rejects after validation routes the update to generateResponse.
     await expect(graph.invoke(initialState)).rejects.toThrow();
   });
 
@@ -222,7 +233,7 @@ describe('agent graph', () => {
         stagingIterations: [],
       };
 
-      // This will route to generateResponse to fix the error, which will fail with network error
+      // The model mock rejects after validation routes the update to generateResponse.
       await expect(graph.invoke(initialState)).rejects.toThrow();
     });
 
@@ -236,7 +247,7 @@ describe('agent graph', () => {
         stagingIterations: [],
       };
 
-      // This will fail with network error since we don't have a real API key
+      // The model mock rejects once the prompt reaches generateResponse.
       await expect(graph.invoke(initialState)).rejects.toThrow();
     });
 
@@ -252,7 +263,7 @@ describe('agent graph', () => {
         stagingIterations: [],
       };
 
-      // This will fail with network error since we don't have a real API key
+      // The model mock rejects once the prompt reaches generateResponse.
       await expect(graph.invoke(initialState)).rejects.toThrow();
     });
   });

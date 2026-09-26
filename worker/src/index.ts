@@ -11,7 +11,7 @@ function validateEnv(env: Env): void {
   const required = [
     'SQIDS_THREAD_ALPHABET',
     'SQIDS_CHECKPOINT_ALPHABET',
-    'ANTHROPIC_API_KEY',
+    'ZAI_API_KEY',
     'DAILY_LLM_CALL_LIMIT',
     'JSCAD_VALIDATION_SERVICE_URL',
   ];

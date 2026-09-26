@@ -10,7 +10,7 @@ import { incrementUsage } from './usage-tracker';
 export interface AgentEnv extends DbEnv {
   HISTORY: any;
   JSCAD_VALIDATION_SERVICE_URL?: string;
-  ANTHROPIC_API_KEY: string;
+  ZAI_API_KEY: string;
   LANGCHAIN_TRACING_V2?: string;
   LANGCHAIN_API_KEY?: string;
   LANGCHAIN_PROJECT?: string;
@@ -177,14 +177,15 @@ function finalize(state: State): State {
 // Node for generating LLM response (may include code or just text)
 async function generateResponse(state: State, config: { validator: CodeValidator; apiKey?: string; db?: any }): Promise<State> {
   // Import at runtime to avoid issues
-  const { ChatAnthropic } = await import('@langchain/anthropic');
+  const { ChatOpenAI } = await import('@langchain/openai');
   const { HumanMessage } = await import('@langchain/core/messages');
 
   const apiKey = config.apiKey || '';
 
-  const llm = new ChatAnthropic({
-    model: 'claude-sonnet-4-5',
+  const llm = new ChatOpenAI({
+    model: 'glm-5.3',
     apiKey,
+    configuration: { baseURL: 'https://api.z.ai/api/paas/v4/' },
   });
 
   // If there's no explicit prompt but there are validation errors, create a default prompt
