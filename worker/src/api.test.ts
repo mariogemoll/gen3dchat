@@ -89,7 +89,7 @@ describe('API endpoints', () => {
     mockInvoke.mockRejectedValue(error);
     mockEnv.DB.prepare().first.mockResolvedValue({ session_id: 'test-session', count: 0 });
     if (path.endsWith('/existing')) {
-      mockEnv.HISTORY.get.mockResolvedValueOnce({ checkpoint: {} });
+      mockEnv.HISTORY.get.mockResolvedValueOnce(JSON.stringify({ checkpoint: {} }));
     }
     const res = await app.fetch(new Request(`http://localhost${path}`, {
       method: 'POST',

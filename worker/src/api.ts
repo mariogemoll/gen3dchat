@@ -7,7 +7,7 @@ import { CloudflareKVSaver } from './kv';
 import {
   createThread,
   getNextThreadId,
-  getSqidFromUuid,
+  getOrCreateCheckpointId,
   getUuidFromSqid,
   verifyThreadOwnership,
   updateThreadTimestamp,
@@ -259,7 +259,7 @@ app.openapi(createThreadRoute, async (c) => {
       // Get the checkpoint ID from the saved checkpoint
       const tuple = await checkpointer.getTuple({ configurable: { thread_id: currentThreadId } });
       const currentCheckpointUuid = tuple?.checkpoint?.id || crypto.randomUUID();
-      const currentCheckpointSqid = await getSqidFromUuid(c.env.DB, currentCheckpointUuid) || currentCheckpointUuid;
+      const currentCheckpointSqid = await getOrCreateCheckpointId(c.env.DB, c.env, currentCheckpointUuid);
 
       // Flush LangSmith traces
       await flushLangSmithTraces(c.env);
@@ -424,7 +424,7 @@ app.openapi(continueThreadRoute, async (c) => {
   const callbacks = createLangSmithCallbacks(c.env);
 
   const config: any = {
-    configurable: { thread_id: threadId },
+    configurable: { thread_id: threadId, checkpoint_id: checkpointUuid },
     callbacks,
   };
 
@@ -443,7 +443,7 @@ app.openapi(continueThreadRoute, async (c) => {
     // Get the new checkpoint ID from the saved checkpoint
     const tuple = await checkpointer.getTuple({ configurable: { thread_id: threadId } });
     const newCheckpointUuid = tuple?.checkpoint?.id || crypto.randomUUID();
-    const newCheckpointSqid = await getSqidFromUuid(c.env.DB, newCheckpointUuid) || newCheckpointUuid;
+    const newCheckpointSqid = await getOrCreateCheckpointId(c.env.DB, c.env, newCheckpointUuid);
 
     // Flush LangSmith traces
     await flushLangSmithTraces(c.env);

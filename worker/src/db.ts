@@ -71,6 +71,15 @@ export async function getSqidFromUuid(db: any, uuid: string): Promise<string | n
   return result?.sqid || null
 }
 
+// Only checkpoints exposed in URLs need a public ID, not every internal graph step.
+export async function getOrCreateCheckpointId(db: any, env: DbEnv, uuid: string): Promise<string> {
+  const existing = await getSqidFromUuid(db, uuid)
+  if (existing) return existing
+  const sqid = await getNextCheckpointId(db, env)
+  await storeCheckpointIdMapping(db, sqid, uuid)
+  return await getSqidFromUuid(db, uuid) || sqid
+}
+
 // Thread management
 export async function verifyThreadOwnership(db: any, threadId: string, sessionId: string): Promise<boolean> {
   const result = await db
