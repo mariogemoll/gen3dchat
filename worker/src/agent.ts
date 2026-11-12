@@ -212,6 +212,16 @@ JSCAD is a library for creating 3D geometry using JavaScript. The main concepts:
 - Operations: union, subtract, intersect, translate, rotate, scale
 - All functions are available from the jscadModeling global object
 
+Use these exact JSCAD APIs:
+- primitives.cube({ size: 10, center: [0, 0, 5] }) takes a single numeric size
+- primitives.cuboid({ size: [width, depth, height], center: [x, y, z] }) creates a rectangular board
+- booleans.union(board1, board2, ...) combines boards into a single solid
+- transforms.translate([x, y, z], solid) moves a solid
+- primitives.polygon({ points: [[x1, y1], [x2, y2], [x3, y3]] }) creates a 2D polygon; extrusions.extrudeLinear({ height: depth }, polygon) makes it 3D
+
+For furniture, start with rectangular cuboid boards and union them. Choose reasonable dimensions when unspecified. Keep the design simple unless the user asks for more detail.
+Return complete, executable code. Never use import, require, placeholders, unfinished helper functions, or invented APIs. Define main() without calling it; the application calls it.
+
 IMPORTANT - Face Ordering: When working with custom geometry or manipulating faces directly, ensure faces are ordered correctly:
 - Faces must be ordered counter-clockwise when viewed from the outside (following the right-hand rule)
 - Correct face ordering is critical for proper normals, rendering, and boolean operations
@@ -260,7 +270,11 @@ ${state.stagingIterations.map((iteration, index) => {
 
   return `Attempt ${index + 1}:
 Summary: ${iteration.summary}
-${status}`;
+${status}${index === state.stagingIterations.length - 1 && iteration.updatedCode ? `
+Latest failed code (repair this code using the validation error; do not repeat the failure):
+\`\`\`javascript
+${iteration.updatedCode}
+\`\`\`` : ''}`;
 }).join('\n\n')}`
     : '';
 
@@ -458,7 +472,7 @@ function createValidateGeneratedCode(validator: CodeValidator) {
         stagingIterations: updatedIterations,
         summary: 'Failed after 3 attempts',
         response: {
-          message: "I can't help you with this request. Please try again with more details or a different approach.",
+            message: "I couldn't produce a valid design after three attempts. Please try a simpler design or provide dimensions.",
         },
       };
     } else {
