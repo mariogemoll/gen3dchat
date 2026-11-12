@@ -124,6 +124,26 @@ describe('agent graph', () => {
     expect(validator.validate).not.toHaveBeenCalled();
   });
 
+  it('includes failed code and its validation error when repairing a design', async () => {
+    const invalidCode = "const unused = require('placeholder'); function main() { return null; }";
+    const validCode = 'const { primitives } = jscadModeling; function main() { return primitives.cuboid({ size: [100, 30, 3] }); }';
+    const response = (code: string) => ({
+      content: `MESSAGE: Created a shelf\nSUMMARY: Shelf board\nCODE:\n\`\`\`javascript\n${code}\n\`\`\``,
+      response_metadata: { finish_reason: 'stop' },
+    });
+    mockInvoke.mockClear().mockResolvedValueOnce(response(invalidCode)).mockResolvedValueOnce(response(validCode));
+    const validator = { validate: vi.fn()
+      .mockResolvedValueOnce('[validate] require() is not allowed')
+      .mockResolvedValueOnce(undefined) };
+    const graph = buildGraph({ validator, apiKey: 'test-key' });
+    const result = await graph.invoke({ userPrompt: 'Please make a shelf' });
+    const repairPrompt = mockInvoke.mock.lastCall?.[0]?.[0]?.content as string;
+    expect(repairPrompt).toContain(invalidCode);
+    expect(repairPrompt).toContain('[validate] require() is not allowed');
+    expect(result.lastValidCode).toBe(validCode);
+    expect(validator.validate).toHaveBeenCalledTimes(2);
+  });
+
   it('should validate user update with valid code', async () => {
     const graph = buildGraph({ validator: new MockValidator() }); // No error
     const initialState = {
