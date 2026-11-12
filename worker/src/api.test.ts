@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import app from './api';
 
+const mockInvoke = vi.hoisted(() => vi.fn());
 vi.mock('@langchain/openai', () => ({
   ChatOpenAI: vi.fn().mockImplementation(function () { return {
-    invoke: vi.fn().mockRejectedValue(new Error('Mock LLM failure')),
+    invoke: mockInvoke,
   }; }),
 }));
 
@@ -33,6 +34,7 @@ describe('API endpoints', () => {
 
   beforeEach(() => {
     mockEnv = createMockEnv();
+    mockInvoke.mockReset().mockRejectedValue(new Error('Mock LLM failure'));
   });
 
   it('should require message or code in POST /_/threads', async () => {
@@ -79,5 +81,25 @@ describe('API endpoints', () => {
 
     // Validation can fail without the service, and the model mock rejects any routed request.
     expect(json.threadId).toBeDefined();
+  });
+
+  it.each(['/_/threads', '/_/threads/existing'])('reports model timeouts for %s', async (path) => {
+    const error = new Error('Request timed out');
+    error.name = 'APIConnectionTimeoutError';
+    mockInvoke.mockRejectedValue(error);
+    mockEnv.DB.prepare().first.mockResolvedValue({ session_id: 'test-session', count: 0 });
+    if (path.endsWith('/existing')) {
+      mockEnv.HISTORY.get.mockResolvedValueOnce({ checkpoint: {} });
+    }
+    const res = await app.fetch(new Request(`http://localhost${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: 'session_id=test-session' },
+      body: JSON.stringify({ message: 'Please make a shelf', checkpointId: 'checkpoint' }),
+    }), mockEnv);
+    expect(res.status).toBe(504);
+    expect(await res.json()).toMatchObject({
+      error: 'Design generation timed out. Please try again with a simpler request.',
+      threadId: expect.any(String),
+    });
   });
 });

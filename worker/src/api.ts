@@ -13,6 +13,7 @@ import {
   updateThreadTimestamp,
 } from './db';
 import { checkDailyLimit } from './usage-tracker';
+import { withGenerationTimeout, isGenerationTimeout, GENERATION_TIMEOUT_MESSAGE } from './generation-timeout';
 
 export interface Env extends AgentEnv {
   DAILY_LLM_CALL_LIMIT: string;
@@ -172,6 +173,12 @@ const createThreadRoute = createRoute({
       },
       description: 'Daily limit exceeded',
     },
+    504: {
+      content: {
+        'application/json': { schema: ErrorResponseSchema },
+      },
+      description: 'Design generation timed out',
+    },
     500: {
       content: {
         'application/json': {
@@ -245,7 +252,9 @@ app.openapi(createThreadRoute, async (c) => {
 
     try {
       // Invoke the graph
-      const result = await graph.invoke(initialState, config);
+      const result = await withGenerationTimeout((signal) =>
+      graph.invoke(initialState, { ...config, signal })
+    );
 
       // Get the checkpoint ID from the saved checkpoint
       const tuple = await checkpointer.getTuple({ configurable: { thread_id: currentThreadId } });
@@ -263,6 +272,10 @@ app.openapi(createThreadRoute, async (c) => {
       }, 200);
     } catch (error: any) {
       console.error('Error processing request:', error);
+
+      if (isGenerationTimeout(error)) {
+        return c.json({ error: GENERATION_TIMEOUT_MESSAGE, threadId: currentThreadId }, 504);
+      }
 
       // Check for missing API key
       if (error.message?.includes('API key') || !c.env.ZAI_API_KEY) {
@@ -332,6 +345,12 @@ const continueThreadRoute = createRoute({
         },
       },
       description: 'Daily limit exceeded',
+    },
+    504: {
+      content: {
+        'application/json': { schema: ErrorResponseSchema },
+      },
+      description: 'Design generation timed out',
     },
     500: {
       content: {
@@ -417,7 +436,9 @@ app.openapi(continueThreadRoute, async (c) => {
 
   try {
     // Invoke the graph to continue from the checkpoint
-    const result = await graph.invoke(initialState, config);
+    const result = await withGenerationTimeout((signal) =>
+      graph.invoke(initialState, { ...config, signal })
+    );
 
     // Get the new checkpoint ID from the saved checkpoint
     const tuple = await checkpointer.getTuple({ configurable: { thread_id: threadId } });
@@ -435,6 +456,10 @@ app.openapi(continueThreadRoute, async (c) => {
     }, 200);
   } catch (error: any) {
     console.error('Error processing request:', error);
+
+    if (isGenerationTimeout(error)) {
+      return c.json({ error: GENERATION_TIMEOUT_MESSAGE, threadId }, 504);
+    }
 
     // Check for missing API key
     if (error.message?.includes('API key') || !c.env.ZAI_API_KEY) {

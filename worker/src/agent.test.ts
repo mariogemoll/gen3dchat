@@ -66,9 +66,62 @@ describe('agent graph', () => {
     expect(ChatOpenAI).toHaveBeenCalledWith({
       model: 'glm-5.3',
       apiKey: 'test-key',
+      modelKwargs: { reasoning_effort: 'low' },
+      maxTokens: 4096,
+      timeout: 45_000,
+      maxRetries: 0,
       configuration: { baseURL: 'https://api.z.ai/api/paas/v4/' },
     });
     expect(mockInvoke).toHaveBeenCalled();
+  });
+
+  it('forwards cancellation to the model request', async () => {
+    const controller = new AbortController();
+    const graph = buildGraph({ validator: new MockValidator(), apiKey: 'test-key' });
+    await expect(graph.invoke({ userPrompt: 'Make a shelf' }, {
+      signal: controller.signal,
+    })).rejects.toThrow('Mock LLM failure');
+    const signal = mockInvoke.mock.lastCall?.[1]?.signal as AbortSignal;
+    expect(signal).toBeDefined();
+    controller.abort();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('sends the reasoning effort and token budget to the provider', async () => {
+    const graph = buildGraph({ validator: new MockValidator(), apiKey: 'test-key' });
+    await expect(graph.invoke({ userPrompt: 'Make a shelf' })).rejects.toThrow('Mock LLM failure');
+    const settings = vi.mocked(ChatOpenAI).mock.lastCall?.[0];
+    expect(typeof settings).toBe('object');
+    const { ChatOpenAI: RealChatOpenAI } = await vi.importActual<typeof import('@langchain/openai')>('@langchain/openai');
+    const fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body.reasoning_effort).toBe('low');
+      expect(body.max_tokens).toBe(4096);
+      return Response.json({
+        id: 'test', object: 'chat.completion', created: 0, model: 'glm-5.3',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'Shelf' }, finish_reason: 'stop' }],
+      });
+    });
+    if (typeof settings !== 'object') throw new Error('Missing model settings');
+    const model = new RealChatOpenAI({
+      ...settings,
+      configuration: { baseURL: 'https://api.z.ai/api/paas/v4/', fetch },
+    });
+    await model.invoke('Make a shelf');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards truncated output and preserves the last valid design', async () => {
+    mockInvoke.mockResolvedValueOnce({
+      content: 'MESSAGE: Created a shelf\nCODE:\n```javascript\nfunction main() {',
+      response_metadata: { finish_reason: 'length' },
+    });
+    const validator = { validate: vi.fn() };
+    const graph = buildGraph({ validator, apiKey: 'test-key' });
+    const result = await graph.invoke({ userPrompt: 'Make a shelf', lastValidCode: 'previous design' });
+    expect(result.response?.message).toContain('generation limit');
+    expect(result.lastValidCode).toBe('previous design');
+    expect(validator.validate).not.toHaveBeenCalled();
   });
 
   it('should validate user update with valid code', async () => {
