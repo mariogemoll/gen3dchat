@@ -253,8 +253,8 @@ app.openapi(createThreadRoute, async (c) => {
     try {
       // Invoke the graph
       const result = await withGenerationTimeout((signal) =>
-      graph.invoke(initialState, { ...config, signal })
-    );
+        graph.invoke(initialState, { ...config, signal })
+      );
 
       // Get the checkpoint ID from the saved checkpoint
       const tuple = await checkpointer.getTuple({ configurable: { thread_id: currentThreadId } });
