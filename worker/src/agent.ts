@@ -5,6 +5,7 @@ import type { DbEnv } from './db';
 import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain';
 import { Client } from 'langsmith';
 import { incrementUsage } from './usage-tracker';
+import type { RunnableConfig } from '@langchain/core/runnables';
 
 // Environment interface for agent needs
 export interface AgentEnv extends DbEnv {
@@ -175,7 +176,7 @@ function finalize(state: State): State {
 }
 
 // Node for generating LLM response (may include code or just text)
-async function generateResponse(state: State, config: { validator: CodeValidator; apiKey?: string; db?: any }): Promise<State> {
+async function generateResponse(state: State, config: { validator: CodeValidator; apiKey?: string; db?: any; signal?: AbortSignal }): Promise<State> {
   // Import at runtime to avoid issues
   const { ChatOpenAI } = await import('@langchain/openai');
   const { HumanMessage } = await import('@langchain/core/messages');
@@ -185,6 +186,11 @@ async function generateResponse(state: State, config: { validator: CodeValidator
   const llm = new ChatOpenAI({
     model: 'glm-5.3',
     apiKey,
+    // GLM reasoning parameters must bypass LangChain's OpenAI model-name detection.
+    modelKwargs: { reasoning_effort: 'low' },
+    maxTokens: 4096,
+    timeout: 45_000,
+    maxRetries: 0,
     configuration: { baseURL: 'https://api.z.ai/api/paas/v4/' },
   });
 
@@ -329,7 +335,7 @@ COMMON MISTAKES TO AVOID:
   const response = await llm.invoke([
     { role: 'system', content: systemPrompt },
     userMessage,
-  ]);
+  ], { signal: config.signal });
 
   // Log full response object to see what metadata is available
   console.log('LLM Full Response:', JSON.stringify(response, null, 2));
@@ -342,6 +348,16 @@ COMMON MISTAKES TO AVOID:
       console.error('Failed to increment usage counter:', error);
       // Don't fail the request if usage tracking fails
     }
+  }
+
+  if (response.response_metadata?.finish_reason === 'length') {
+    return {
+      ...state,
+      stagingIterations: [...state.stagingIterations, {
+        message: 'The design exceeded the generation limit. Please try a simpler request.',
+        summary: 'Generation stopped at the token limit; incomplete code was discarded.',
+      }],
+    };
   }
 
   const responseContent = typeof response.content === 'string' ? response.content : '';
@@ -478,8 +494,8 @@ function routeAfterGeneratedCodeValidation(state: State): string {
 
 // Factory function to create generateResponse with injectable validator
 function createGenerateResponse(validator: CodeValidator, apiKey?: string, db?: any) {
-  return async (state: State): Promise<State> => {
-    return generateResponse(state, { validator, apiKey, db });
+  return async (state: State, config: RunnableConfig): Promise<State> => {
+    return generateResponse(state, { validator, apiKey, db, signal: config.signal });
   };
 }
 
